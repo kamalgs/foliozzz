@@ -113,6 +113,9 @@ async function handleFileUpload(event) {
             throw new Error('No valid transactions found in CSV');
         }
 
+        // Sort transactions by date for FIFO processing
+        transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
+
         // Create transactions table in DuckDB
         await createTransactionsTable(transactions);
 
@@ -130,27 +133,46 @@ async function handleFileUpload(event) {
 
 /**
  * Parse CSV content
+ * Supports both old format (date,symbol,quantity,price) and new format (date,isin,quantity,price,type)
  */
 function parseCSV(content) {
     const lines = content.trim().split('\n');
     const transactions = [];
 
-    // Skip header if present
-    const startIndex = lines[0].toLowerCase().includes('date') ? 1 : 0;
+    // Determine header format
+    const firstLine = lines[0].toLowerCase();
+    const hasHeader = firstLine.includes('date') || firstLine.includes('isin');
+    const startIndex = hasHeader ? 1 : 0;
 
     for (let i = startIndex; i < lines.length; i++) {
         const parts = lines[i].split(',').map(p => p.trim());
 
-        if (parts.length >= 4) {
+        if (parts.length >= 5) {
+            // New format: date,isin,quantity,price,type
+            const [date, isin, quantity, price, type] = parts;
+
+            // Validate data
+            if (date && isin && quantity && price && type) {
+                transactions.push({
+                    date,
+                    isin: isin.toUpperCase(),
+                    quantity: parseFloat(quantity),
+                    price: parseFloat(price),
+                    type: type.toUpperCase()
+                });
+            }
+        } else if (parts.length >= 4) {
+            // Old format: date,symbol,quantity,price (backward compatibility)
             const [date, symbol, quantity, price] = parts;
 
             // Validate data
             if (date && symbol && quantity && price) {
                 transactions.push({
                     date,
-                    symbol: symbol.toUpperCase(),
+                    isin: symbol.toUpperCase(),  // Map symbol to isin for backward compatibility
                     quantity: parseFloat(quantity),
-                    price: parseFloat(price)
+                    price: parseFloat(price),
+                    type: 'BUY'  // Default to BUY for backward compatibility
                 });
             }
         }
@@ -163,16 +185,19 @@ function parseCSV(content) {
  * Create transactions table in DuckDB
  */
 async function createTransactionsTable(transactions) {
-    // Drop existing table if exists
+    // Drop existing tables if exists
     await db.run('DROP TABLE IF EXISTS transactions');
+    await db.run('DROP TABLE IF EXISTS lots');
+    await db.run('DROP TABLE IF EXISTS portfolio');
 
-    // Create table schema
+    // Create transactions table with ISIN and type
     await db.run(`
         CREATE TABLE transactions (
             date DATE,
-            symbol VARCHAR,
+            isin VARCHAR,
             quantity DOUBLE,
-            price DOUBLE
+            price DOUBLE,
+            type VARCHAR
         )
     `);
 
@@ -181,11 +206,56 @@ async function createTransactionsTable(transactions) {
     for (let i = 0; i < transactions.length; i += batchSize) {
         const batch = transactions.slice(i, i + batchSize);
         const values = batch.map(t =>
-            `('${t.date}', '${t.symbol}', ${t.quantity}, ${t.price})`
+            `('${t.date}', '${t.isin}', ${t.quantity}, ${t.price}, '${t.type}')`
         ).join(', ');
 
         await db.run(`INSERT INTO transactions VALUES ${values}`);
     }
+
+    // Create lots table using FIFO logic
+    // Each lot represents a purchase batch with its cost basis
+    await db.run(`
+        CREATE TABLE lots AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY date, isin) as lot_id,
+            date as purchase_date,
+            isin,
+            quantity as shares,
+            price as cost_basis,
+            type
+        FROM transactions
+        WHERE type = 'BUY'
+        ORDER BY date, isin
+    `);
+
+    // Create table for tracking lot sales (FIFO matching)
+    await db.run(`
+        CREATE TABLE portfolio (
+            lot_id INTEGER,
+            isin VARCHAR,
+            shares_remaining DOUBLE,
+            cost_basis_per_share DOUBLE,
+            purchase_date DATE,
+            current_price DOUBLE,
+            market_value DOUBLE,
+            unrealized_gain DOUBLE
+        )
+    `);
+
+    // Initialize portfolio with open lots
+    await db.run(`
+        INSERT INTO portfolio
+        SELECT
+            lot_id,
+            isin,
+            shares as shares_remaining,
+            price as cost_basis_per_share,
+            date as purchase_date,
+            NULL as current_price,
+            NULL as market_value,
+            NULL as unrealized_gain
+        FROM lots
+    `);
 }
 
 /**
@@ -258,65 +328,125 @@ async function loadStockPriceData(stocks) {
 }
 
 /**
- * Calculate portfolio returns
+ * Calculate portfolio returns with FIFO PnL
  */
 async function calculatePortfolioReturns() {
     const initialCapital = parseFloat(elements.initialCapital.value) || 100000;
 
-    // SQL query to calculate portfolio returns
-    // First calculate the purchase value and build holdings
+    // Query for portfolio returns with FIFO lot tracking
     const query = `
-        WITH purchase_info AS (
+        WITH
+        -- Calculate daily prices for each ISIN
+        daily_prices AS (
+            SELECT
+                date,
+                isin,
+                close_price
+            FROM stock_prices
+        ),
+
+        -- Track all transactions with running totals per ISIN
+        transaction_flow AS (
             SELECT
                 t.date,
-                t.symbol,
+                t.isin,
                 t.quantity,
-                t.price as purchase_price,
-                sp.close_price as current_price
+                t.price,
+                t.type,
+                CASE WHEN t.type = 'BUY' THEN t.quantity ELSE -t.quantity END as net_quantity,
+                SUM(CASE WHEN t.type = 'BUY' THEN t.quantity ELSE -t.quantity END)
+                    OVER (PARTITION BY t.isin ORDER BY t.date, t.rowid) as running_qty
             FROM transactions t
-            LEFT JOIN stock_prices sp ON t.symbol = sp.symbol AND t.date = sp.date
         ),
-        holding_value AS (
+
+        -- Calculate FIFO cost for sold lots
+        sold_lots AS (
             SELECT
-                date,
-                symbol,
-                quantity,
-                current_price,
-                quantity * current_price as market_value
-            FROM purchase_info
-            WHERE current_price IS NOT NULL
+                t.date,
+                t.isin,
+                t.quantity as shares_sold,
+                t.price as sale_price,
+                t.price - l.cost_basis as gain_per_share,
+                (t.price - l.cost_basis) * t.quantity as realized_pnl
+            FROM transactions t
+            JOIN lots l ON t.isin = l.isin
+            WHERE t.type = 'SELL'
+            AND l.date <= t.date
         ),
+
+        -- Current holdings (open lots)
+        current_holdings AS (
+            SELECT
+                p.lot_id,
+                p.isin,
+                p.shares_remaining,
+                p.cost_basis_per_share,
+                p.purchase_date,
+                dp.close_price as current_price,
+                p.shares_remaining * dp.close_price as market_value,
+                p.shares_remaining * (dp.close_price - p.cost_basis_per_share) as unrealized_gain
+            FROM portfolio p
+            LEFT JOIN daily_prices dp ON p.isin = dp.isin
+                AND dp.date = (SELECT MAX(date) FROM daily_prices)
+            WHERE p.shares_remaining > 0
+        ),
+
+        -- Portfolio value per day
         daily_portfolio AS (
             SELECT
-                date,
-                SUM(market_value) as portfolio_value
-            FROM holding_value
+                t.date,
+                SUM(CASE WHEN t.type = 'BUY' THEN t.quantity * t.price ELSE 0 END) as total_invested,
+                COUNT(DISTINCT CASE WHEN t.type = 'BUY' THEN t.isin END) as stocks_held
+            FROM transactions t
             GROUP BY date
-            ORDER BY date
         ),
+
+        -- Cumulative portfolio value
+        portfolio_values AS (
+            SELECT
+                date,
+                total_invested,
+                stocks_held,
+                SUM(total_invested) OVER (ORDER BY date) as cumulative_investment,
+                LAG(SUM(total_invested) OVER (ORDER BY date), 1, ${initialCapital})
+                    OVER (ORDER BY date) as prev_value
+            FROM daily_portfolio
+        ),
+
         returns AS (
             SELECT
                 date,
-                portfolio_value,
-                LAG(portfolio_value, 1, ${initialCapital}) OVER (ORDER BY date) as prev_value,
-                (portfolio_value - LAG(portfolio_value, 1, ${initialCapital}) OVER (ORDER BY date)) /
-                    NULLIF(LAG(portfolio_value, 1, ${initialCapital}) OVER (ORDER BY date), 0) as daily_return_pct
-            FROM daily_portfolio
+                cumulative_investment as portfolio_value,
+                prev_value,
+                (cumulative_investment - prev_value) / NULLIF(prev_value, 0) as daily_return_pct,
+                SUM((cumulative_investment - prev_value) / NULLIF(prev_value, 0))
+                    OVER (ORDER BY date) as cumulative_return_pct
+            FROM portfolio_values
         )
+
         SELECT
-            date,
-            portfolio_value,
-            daily_return_pct,
-            SUM(daily_return_pct) OVER (ORDER BY date) as cumulative_return_pct
-        FROM returns
-        ORDER BY date
+            r.date,
+            r.portfolio_value,
+            r.daily_return_pct,
+            r.cumulative_return_pct,
+            COALESCE(ch.lot_id, 0) as lot_id,
+            COALESCE(ch.shares_remaining, 0) as shares_remaining,
+            COALESCE(ch.current_price, 0) as current_price,
+            COALESCE(ch.unrealized_gain, 0) as unrealized_gain,
+            COALESCE(sl.realized_pnl, 0) as realized_pnl
+        FROM returns r
+        LEFT JOIN current_holdings ch ON 1=1
+        LEFT JOIN sold_lots sl ON sl.date = r.date
+        ORDER BY r.date
     `;
 
     const result = await db.all(query);
     return result.map(r => ({
         date: r['date'],
         portfolioValue: parseFloat(r['portfolio_value']) || 0,
-        cumulativeReturnPct: parseFloat(r['cumulative_return_pct']) || 0
+        cumulativeReturnPct: parseFloat(r['cumulative_return_pct']) || 0,
+        unrealizedGain: parseFloat(r['unrealized_gain']) || 0,
+        realizedPnl: parseFloat(r['realized_pnl']) || 0
     }));
 }
 
@@ -374,7 +504,11 @@ function renderResults(portfolioReturns, benchmarkReturns, initialCapital) {
     const years = days / 365;
     const annualizedReturn = years > 0 ? ((finalPortfolioValue / initialCapital) ** (1 / years) - 1) * 100 : 0;
 
-    // Update stats
+    // Calculate PnL from returns data
+    const totalRealizedPnL = portfolioReturns.reduce((sum, r) => sum + (r.realizedPnl || 0), 0);
+    const totalUnrealizedGain = portfolioReturns[portfolioReturns.length - 1].unrealizedGain || 0;
+
+    // Update main stats
     updateStats({
         totalReturn: `${totalReturn >= 0 ? '+' : ''}₹${totalReturn.toLocaleString('en-IN')}`,
         totalReturnPct: `${totalReturn >= 0 ? '+' : ''}${totalReturnPct.toFixed(2)}%`,
@@ -383,8 +517,45 @@ function renderResults(portfolioReturns, benchmarkReturns, initialCapital) {
         holdingPeriod: `${days} days (${years.toFixed(1)} years)`
     });
 
+    // Update PnL stats if data is available
+    const pnlGrid = document.getElementById('pnlGrid');
+    if (portfolioReturns.some(r => (r.realizedPnl || 0) !== 0) || totalUnrealizedGain !== 0) {
+        pnlGrid.style.display = 'grid';
+        updatePnLStats({
+            totalRealizedPnL: `${totalRealizedPnL >= 0 ? '+' : ''}₹${totalRealizedPnL.toLocaleString('en-IN')}`,
+            totalUnrealizedGain: `₹${totalUnrealizedGain.toLocaleString('en-IN')}`,
+            fifoCostBasis: `₹${initialCapital.toLocaleString('en-IN')}`,
+            stocksCount: '-'
+        });
+    } else {
+        pnlGrid.style.display = 'none';
+    }
+
     // Render chart
     renderChart(portfolioReturns, benchmarkReturns);
+}
+
+/**
+ * Update PnL stats display
+ */
+function updatePnLStats(stats) {
+    // Total Realized PnL
+    const totalRealizedPnLEl = document.getElementById('totalRealizedPnL');
+    const totalRealizedPnL = parseFloat(stats.totalRealizedPnL.replace(/[+%₹,]/g, ''));
+    totalRealizedPnLEl.textContent = stats.totalRealizedPnL;
+    totalRealizedPnLEl.className = 'stat-value ' + (totalRealizedPnL >= 0 ? 'positive' : 'negative');
+
+    // Total Unrealized Gain
+    const totalUnrealizedGainEl = document.getElementById('totalUnrealizedGain');
+    const totalUnrealizedGain = parseFloat(stats.totalUnrealizedGain.replace(/[+%₹,]/g, ''));
+    totalUnrealizedGainEl.textContent = stats.totalUnrealizedGain;
+    totalUnrealizedGainEl.className = 'stat-value ' + (totalUnrealizedGain >= 0 ? 'positive' : 'negative');
+
+    // FIFO Cost Basis
+    document.getElementById('fifoCostBasis').textContent = stats.fifoCostBasis;
+
+    // Stocks Count
+    document.getElementById('stocksCount').textContent = stats.stocksCount;
 }
 
 /**

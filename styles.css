@@ -286,6 +286,18 @@ footer {
     }
 }
 
+/* PnL Grid */
+.pnl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.pnl-grid .stat-card {
+    background: rgba(79, 172, 254, 0.1);
+    border-color: rgba(79, 172, 254, 0.2);
+}
+
 /* Stock Details Section */
 .stock-details-section {
     margin-top: 2rem;

@@ -18,7 +18,8 @@
             <h2>Upload Transactions</h2>
             <div class="upload-container">
                 <input type="file" id="csvInput" accept=".csv" class="file-input">
-                <p class="hint">CSV Format: date,symbol,quantity,price (e.g., 2024-01-15,RELIANCE,10,2500)</p>
+                <p class="hint">CSV Format: transaction_date,isin,quantity,price,type (e.g., 2024-01-15,INE002A01018,10,2500,BUY)</p>
+                <p class="hint">Type: BUY or SELL (FIFO cost basis tracking enabled)</p>
             </div>
         </section>
 
@@ -62,6 +63,24 @@
                 <div class="stat-card">
                     <div class="stat-value" id="holdingPeriod">-</div>
                     <div class="stat-label">Holding Period</div>
+                </div>
+            </div>
+            <div class="pnl-grid" id="pnlGrid" style="display: none; margin-top: 20px;">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalRealizedPnL">-</div>
+                    <div class="stat-label">Realized PnL</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="totalUnrealizedGain">-</div>
+                    <div class="stat-label">Unrealized Gain</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="fifoCostBasis">-</div>
+                    <div class="stat-label">FIFO Cost Basis</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stocksCount">-</div>
+                    <div class="stat-label">Stocks Held</div>
                 </div>
             </div>
         </section>
