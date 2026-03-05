@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Analysis - Indian Stocks</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Portfolio Analysis</h1>
+        <p>Analyze your Indian stock portfolio returns vs benchmarks</p>
+    </header>
+
+    <main>
+        <!-- Upload Section -->
+        <section class="upload-section">
+            <h2>Upload Transactions</h2>
+            <div class="upload-container">
+                <input type="file" id="csvInput" accept=".csv" class="file-input">
+                <p class="hint">CSV Format: date,symbol,quantity,price (e.g., 2024-01-15,RELIANCE,10,2500)</p>
+            </div>
+        </section>
+
+        <!-- Configuration Section -->
+        <section class="config-section">
+            <h2>Configuration</h2>
+            <div class="config-container">
+                <div class="form-group">
+                    <label for="benchmarkSelect">Benchmark Index:</label>
+                    <select id="benchmarkSelect">
+                        <option value="nifty50">NIFTY 50</option>
+                        <option value="bank_nifty">NIFTY BANK</option>
+                        <option value="sensex">SENSEX</option>
+                        <option value="nifty_midcap">NIFTY MIDCAP 100</option>
+                        <option value="bse_500">BSE 500</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="initialCapital">Initial Capital (₹):</label>
+                    <input type="number" id="initialCapital" value="100000" min="0">
+                </div>
+            </div>
+        </section>
+
+        <!-- Analysis Section -->
+        <section class="analysis-section">
+            <h2>Performance Analysis</h2>
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalReturn">-</div>
+                    <div class="stat-label">Total Return</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="annualizedReturn">-</div>
+                    <div class="stat-label">Annualized Return</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="portfolioValue">-</div>
+                    <div class="stat-label">Current Portfolio Value</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="holdingPeriod">-</div>
+                    <div class="stat-label">Holding Period</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Chart Section -->
+        <section class="chart-section">
+            <h2>Returns Comparison</h2>
+            <div class="chart-container">
+                <canvas id="returnsChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Loading Section -->
+        <section class="loading-section" id="loadingSection" style="display: none;">
+            <div class="loader">
+                <div class="spinner"></div>
+                <p id="loadingText">Loading DuckDB...</p>
+            </div>
+        </section>
+
+        <!-- Error Section -->
+        <section class="error-section" id="errorSection" style="display: none;">
+            <div class="error-message">
+                <span id="errorMessage"></span>
+                <button id="retryBtn">Retry</button>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Data provided by NSE/BSE. For educational purposes only.</p>
+    </footer>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "duckdb": "https://cdn.jsdelivr.net/npm/duckdb@1.4.4/duckdb.js"
+        }
+    }
+    </script>
+
+    <!-- Application Code -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
