@@ -1,0 +1,27 @@
+{
+  "name": "foliozzz",
+  "version": "1.0.0",
+  "description": "A completely browser-based portfolio analysis application for Indian stocks using DuckDB WebAssembly.",
+  "type": "module",
+  "main": "app.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kamalgs/foliozzz.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/kamalgs/foliozzz/issues"
+  },
+  "homepage": "https://github.com/kamalgs/foliozzz#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

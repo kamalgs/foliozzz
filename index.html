@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <script>
+        // Suppress "module is not defined" errors from DuckDB WASM library
+        const errorHandler = (event) => {
+            if (event.error && event.error.message && event.error.message.includes('module is not defined')) {
+                event.preventDefault();
+                return true;
+            }
+        };
+        window.addEventListener('error', errorHandler, true);
+    </script>
+
     <header>
         <h1>Portfolio Analysis</h1>
         <p>Analyze your Indian stock portfolio returns vs benchmarks</p>
@@ -116,10 +127,12 @@
 
     <!-- External Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- DuckDB WebAssembly ESM -->
     <script type="importmap">
     {
         "imports": {
-            "duckdb": "https://cdn.jsdelivr.net/npm/duckdb@1.4.4/duckdb.js"
+            "duckdb": "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm"
         }
     }
     </script>
