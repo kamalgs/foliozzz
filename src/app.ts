@@ -1,18 +1,19 @@
 import { initDuckDB, runQuery, isReady, asDB, registerParquet } from './duckdb-module.ts';
 import { parseCSV } from './portfolio.ts';
-import { loadTransactions, getStats, getTimeSeries } from './analysis.ts';
+import { loadTransactions, getStats } from './analysis.ts';
 import { generateInsights, hasDefaultKey } from './insights.ts';
-import type { Transaction, PortfolioStats, TimeSeriesPoint } from './types.ts';
+import { buildDailyTimeSeries } from './timeseries.ts';
+import type { Transaction, PortfolioStats } from './types.ts';
+import type { DailyValue } from './timeseries.ts';
 
 declare const Chart: {
     new (ctx: CanvasRenderingContext2D, config: Record<string, unknown>): ChartInstance;
 };
 interface ChartInstance { destroy(): void; }
 
-interface BenchmarkReturn {
-    date: string | Date;
-    closePrice: number;
-    cumulativeReturnPct: number;
+interface BenchmarkPoint {
+    x: number;  // epoch ms
+    y: number;  // return %
 }
 
 const CONFIG = {
@@ -128,10 +129,17 @@ async function runAnalysis(): Promise<void> {
         const stats = await getStats(db, INITIAL_CAPITAL);
         if (!stats) { showError('No portfolio data available for analysis'); hideLoading(); return; }
 
-        const timeSeries = await getTimeSeries(db, INITIAL_CAPITAL);
-        const benchmarkReturns = await calculateBenchmarkReturns(elements.benchmarkSelect.value);
+        showLoading('Loading stock prices...');
+        const dailySeries = await buildDailyTimeSeries(db, INITIAL_CAPITAL);
 
-        renderResults(stats, timeSeries, benchmarkReturns);
+        showLoading('Loading benchmark...');
+        const benchmarkPoints = await calculateBenchmarkReturns(
+            elements.benchmarkSelect.value,
+            dailySeries.length > 0 ? dailySeries[0].date : 0,
+            dailySeries.length > 0 ? dailySeries[dailySeries.length - 1].date : 0
+        );
+
+        renderResults(stats, dailySeries, benchmarkPoints);
         elements.uploadSection.style.display = 'none';
         elements.insightsSection.style.display = 'block';
         hideLoading();
@@ -141,38 +149,37 @@ async function runAnalysis(): Promise<void> {
     }
 }
 
-async function calculateBenchmarkReturns(benchmarkKey: string): Promise<BenchmarkReturn[]> {
+async function calculateBenchmarkReturns(
+    benchmarkKey: string, startMs: number, endMs: number
+): Promise<BenchmarkPoint[]> {
+    if (!startMs || !endMs) return [];
     const parquetFile = CONFIG.benchmarks[benchmarkKey];
     try {
         await registerParquet(parquetFile, `${CONFIG.dataPath}/${parquetFile}`);
+        const startDate = new Date(startMs).toISOString().slice(0, 10);
+        const endDate = new Date(endMs).toISOString().slice(0, 10);
         const rows = await runQuery(`
-            WITH daily AS (
-                SELECT date, close,
-                    (close - LAG(close) OVER (ORDER BY date)) /
-                        NULLIF(LAG(close) OVER (ORDER BY date), 0) * 100 as daily_return_pct
+            WITH base AS (
+                SELECT date, close
                 FROM parquet_scan('${parquetFile}')
                 WHERE date IS NOT NULL AND close IS NOT NULL
+                  AND date >= '${startDate}' AND date <= '${endDate}'
+                ORDER BY date
+            ),
+            first_close AS (
+                SELECT close AS c0 FROM base LIMIT 1
             )
-            SELECT date, close, daily_return_pct,
-                SUM(daily_return_pct) OVER (ORDER BY date) as cumulative_return_pct
-            FROM daily
-            ORDER BY date
+            SELECT b.date, ((b.close - fc.c0) / fc.c0) * 100 AS return_pct
+            FROM base b, first_close fc
+            ORDER BY b.date
         `);
         return rows.map(r => {
             const d = r.date;
-            let dateStr: string;
-            if (typeof d === 'number') {
-                dateStr = new Date(d).toISOString().slice(0, 10);
-            } else if (d instanceof Date) {
-                dateStr = d.toISOString().slice(0, 10);
-            } else {
-                dateStr = String(d).slice(0, 10);
-            }
-            return {
-                date: dateStr,
-                closePrice: Number(r.close) || 0,
-                cumulativeReturnPct: Number(r.cumulative_return_pct) || 0
-            };
+            let ts: number;
+            if (typeof d === 'number') ts = d;
+            else if (d instanceof Date) ts = d.getTime();
+            else ts = new Date(String(d)).getTime();
+            return { x: ts, y: Number(r.return_pct) || 0 };
         });
     } catch (error) {
         console.warn(`Could not load benchmark data for ${benchmarkKey}:`, (error as Error).message);
@@ -180,7 +187,7 @@ async function calculateBenchmarkReturns(benchmarkKey: string): Promise<Benchmar
     }
 }
 
-function renderResults(stats: PortfolioStats, timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkReturn[]): void {
+function renderResults(stats: PortfolioStats, dailySeries: DailyValue[], benchmarkPoints: BenchmarkPoint[]): void {
     const el = (id: string) => document.getElementById(id) as HTMLElement;
 
     const totalReturnEl = el('totalReturn');
@@ -207,27 +214,16 @@ function renderResults(stats: PortfolioStats, timeSeries: TimeSeriesPoint[], ben
         pnlGrid.style.display = 'none';
     }
 
-    renderChart(timeSeries, benchmarkReturns);
+    renderChart(dailySeries, benchmarkPoints);
 }
 
-function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkReturn[]): void {
+function renderChart(dailySeries: DailyValue[], benchmarkPoints: BenchmarkPoint[]): void {
     const ctx = (document.getElementById('returnsChart') as HTMLCanvasElement).getContext('2d')!;
 
-    // Build portfolio {x: Date, y: returnPct} points
-    const portfolioPoints = timeSeries.map(r => ({
-        x: new Date(String(r.date)).getTime(),
+    const portfolioPoints = dailySeries.map(r => ({
+        x: r.date,
         y: r.returnPct
     }));
-
-    // Build benchmark {x: Date, y: cumulativeReturnPct} points within portfolio date range
-    let benchmarkPoints: { x: number; y: number }[] = [];
-    if (benchmarkReturns.length > 0 && portfolioPoints.length > 0) {
-        const firstTime = portfolioPoints[0].x;
-        const lastTime = portfolioPoints[portfolioPoints.length - 1].x;
-        benchmarkPoints = benchmarkReturns
-            .map(r => ({ x: new Date(String(r.date)).getTime(), y: r.cumulativeReturnPct }))
-            .filter(p => p.x >= firstTime && p.x <= lastTime);
-    }
 
     if (chart) chart.destroy();
 
@@ -240,11 +236,10 @@ function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkR
                     data: portfolioPoints,
                     borderColor: '#5367ff',
                     backgroundColor: 'rgba(83, 103, 255, 0.08)',
-                    borderWidth: 2, pointRadius: 0, fill: true, tension: 0.1,
-                    stepped: 'before' as unknown as boolean
+                    borderWidth: 2, pointRadius: 0, fill: true, tension: 0.1
                 },
                 {
-                    label: 'Benchmark (' + elements.benchmarkSelect.options[elements.benchmarkSelect.selectedIndex].text + ')',
+                    label: elements.benchmarkSelect.options[elements.benchmarkSelect.selectedIndex].text,
                     data: benchmarkPoints,
                     borderColor: '#00d09c',
                     borderWidth: 2, pointRadius: 0, fill: false, tension: 0.1
@@ -263,8 +258,7 @@ function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkR
                         label: (ctx: { dataset: { label: string }; parsed: { y: number } }) =>
                             ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%'
                     }
-                },
-                title: { display: true, text: 'Cumulative Returns Comparison', color: '#44475b', font: { size: 14 } }
+                }
             },
             scales: {
                 x: {
