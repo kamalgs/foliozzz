@@ -51,7 +51,7 @@ test.describe('Page load', () => {
 
     test('CSV format hint shows ISIN-based format', async ({ page }) => {
         await page.goto('/');
-        const hint = page.locator('.hint').first();
+        const hint = page.locator('.upload-section .hint').first();
         await expect(hint).toContainText('isin');
         await expect(hint).toContainText('BUY');
     });

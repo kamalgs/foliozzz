@@ -13,8 +13,29 @@
     </header>
 
     <main>
-        <!-- Upload Section -->
-        <section class="upload-section">
+        <!-- AI Insights Section (shown after upload, replaces upload section) -->
+        <section class="insights-section" id="insightsSection" style="display: none;">
+            <div class="insights-header">
+                <h2>AI Insights</h2>
+                <button id="changeFile" class="change-file-btn">Change CSV</button>
+            </div>
+            <div class="insights-status" id="insightsStatus" style="display: none;"></div>
+            <div class="insights-output" id="insightsOutput"></div>
+            <details class="insights-upgrade">
+                <summary>Use your own API key for deeper analysis</summary>
+                <div class="insights-config">
+                    <div class="form-group">
+                        <label for="apiKey">OpenRouter API Key:</label>
+                        <input type="password" id="apiKey" placeholder="sk-or-..." autocomplete="off">
+                    </div>
+                    <button id="generateInsights" class="insights-btn" disabled>Re-generate with Premium Model</button>
+                </div>
+                <p class="hint">Uses Claude Sonnet via <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a>. Key stays in your browser.</p>
+            </details>
+        </section>
+
+        <!-- Upload Section (hidden after successful upload) -->
+        <section class="upload-section" id="uploadSection">
             <h2>Upload Transactions</h2>
             <div class="upload-container">
                 <input type="file" id="csvInput" accept=".csv" class="file-input">
@@ -91,24 +112,6 @@
             <div class="chart-container">
                 <canvas id="returnsChart"></canvas>
             </div>
-        </section>
-
-        <!-- AI Insights Section -->
-        <section class="insights-section" id="insightsSection" style="display: none;">
-            <h2>AI Insights</h2>
-            <div class="insights-status" id="insightsStatus" style="display: none;"></div>
-            <div class="insights-output" id="insightsOutput"></div>
-            <details class="insights-upgrade">
-                <summary>Use your own API key for deeper analysis</summary>
-                <div class="insights-config">
-                    <div class="form-group">
-                        <label for="apiKey">OpenRouter API Key:</label>
-                        <input type="password" id="apiKey" placeholder="sk-or-..." autocomplete="off">
-                    </div>
-                    <button id="generateInsights" class="insights-btn" disabled>Re-generate with Premium Model</button>
-                </div>
-                <p class="hint">Uses Claude Sonnet via <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a>. Key stays in your browser.</p>
-            </details>
         </section>
 
         <!-- Loading Section -->

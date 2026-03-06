@@ -38,6 +38,8 @@ const elements = {
     errorSection: document.getElementById('errorSection') as HTMLElement,
     errorMessage: document.getElementById('errorMessage') as HTMLElement,
     retryBtn: document.getElementById('retryBtn') as HTMLButtonElement,
+    uploadSection: document.getElementById('uploadSection') as HTMLElement,
+    changeFileBtn: document.getElementById('changeFile') as HTMLButtonElement,
     insightsSection: document.getElementById('insightsSection') as HTMLElement,
     apiKey: document.getElementById('apiKey') as HTMLInputElement,
     generateInsightsBtn: document.getElementById('generateInsights') as HTMLButtonElement,
@@ -69,6 +71,11 @@ function setupEventListeners(): void {
         elements.generateInsightsBtn.disabled = !elements.apiKey.value.trim();
     });
     elements.generateInsightsBtn.addEventListener('click', handleGenerateInsights);
+    elements.changeFileBtn.addEventListener('click', () => {
+        elements.insightsSection.style.display = 'none';
+        elements.uploadSection.style.display = 'block';
+        elements.csvInput.value = '';
+    });
 }
 
 async function handleFileUpload(event: Event): Promise<void> {
@@ -110,6 +117,7 @@ async function runAnalysis(): Promise<void> {
         const benchmarkReturns = await calculateBenchmarkReturns(elements.benchmarkSelect.value);
 
         renderResults(stats, timeSeries, benchmarkReturns);
+        elements.uploadSection.style.display = 'none';
         elements.insightsSection.style.display = 'block';
         hideLoading();
 
