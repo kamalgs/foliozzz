@@ -14,6 +14,7 @@ npm run build
 
 echo "Deploying to $DEPLOY_DIR..."
 sudo cp app.js index.html styles.css duckdb-module.js "$DEPLOY_DIR/"
+sudo cp data/isin_map.json "$DEPLOY_DIR/data/"
 
 if [ -n "$API_KEY" ]; then
     echo "Injecting API key..."

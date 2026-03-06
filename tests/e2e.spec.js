@@ -324,6 +324,23 @@ test.describe('Benchmark time series data', () => {
         }
     });
 
+    test('portfolio has daily data points (not just transaction dates)', async ({ page }) => {
+        const result = await page.evaluate(() => {
+            const canvas = document.getElementById('returnsChart');
+            const chart = Chart.getChart(canvas);
+            if (!chart) return null;
+            const data = chart.data.datasets[0]?.data ?? [];
+            return { count: data.length, values: data.slice(0, 5).map(p => p.y) };
+        });
+
+        expect(result, 'Portfolio dataset should exist').not.toBeNull();
+        // Sample CSV spans Jan-Dec 2024, should have many daily points
+        expect(result.count, 'Should have many daily data points').toBeGreaterThan(30);
+
+        const uniqueValues = new Set(result.values.map(v => v?.toFixed(4)));
+        expect(uniqueValues.size, 'Portfolio returns should vary daily').toBeGreaterThan(1);
+    });
+
     test('benchmark has variance (not flat)', async ({ page }) => {
         const result = await page.evaluate(() => {
             const canvas = document.getElementById('returnsChart');
