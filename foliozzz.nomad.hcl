@@ -4,51 +4,42 @@ variable "openrouter_api_key" {
   default     = ""
 }
 
-variable "image" {
-  type    = string
-  default = "foliozzz:latest"
-}
-
 job "foliozzz" {
   datacenters = ["dc1"]
   type        = "service"
 
-  group "web" {
+  group "foliozzz" {
     count = 1
 
     network {
-      port "http" {
-        to = 80
-      }
+      mode = "host"
     }
 
-    service {
-      name = "foliozzz"
-      port = "http"
-
-      check {
-        type     = "http"
-        path     = "/"
-        interval = "10s"
-        timeout  = "2s"
-      }
+    volume "data" {
+      type      = "host"
+      source    = "foliozzz_data"
+      read_only = true
     }
 
-    task "nginx" {
+    task "foliozzz" {
       driver = "docker"
 
       config {
-        image = var.image
-        ports = ["http"]
+        image        = "caddy:2-alpine"
+        network_mode = "host"
+        entrypoint   = ["/bin/sh", "-c"]
+        args         = ["caddy run --config /usr/share/caddy/Caddyfile"]
       }
 
-      env {
-        OPENROUTER_API_KEY = var.openrouter_api_key
+      volume_mount {
+        volume      = "data"
+        destination = "/usr/share/caddy"
+        read_only   = true
       }
 
       resources {
-        cpu    = 100
-        memory = 64
+        cpu    = 256
+        memory = 256
       }
     }
   }

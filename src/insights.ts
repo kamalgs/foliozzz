@@ -207,7 +207,10 @@ async function executeTool(db: DB, name: string, args: Record<string, unknown>):
 // Injected at deploy time by entrypoint.sh from OPENROUTER_API_KEY env var
 const DEFAULT_API_KEY = '__OPENROUTER_API_KEY__';
 
-const FREE_MODEL = 'openrouter/free';
+const FREE_MODELS = [
+    'stepfun/step-3.5-flash:free',
+    'meta-llama/llama-3.3-70b-instruct:free'
+];
 const PREMIUM_MODEL = 'anthropic/claude-sonnet-4';
 
 export interface InsightsConfig {
@@ -248,7 +251,9 @@ export async function generateInsights(
     onStatus?: (msg: string) => void
 ): Promise<string> {
     const apiKey = config.apiKey || DEFAULT_API_KEY;
-    const model = config.model || (config.apiKey ? PREMIUM_MODEL : FREE_MODEL);
+    const models = config.model
+        ? [config.model]
+        : config.apiKey ? [PREMIUM_MODEL] : FREE_MODELS;
 
     if (!apiKey || apiKey.startsWith('__OPENROUTER_')) {
         throw new Error('No API key configured. Please enter your OpenRouter API key.');
@@ -262,7 +267,7 @@ export async function generateInsights(
     for (let turn = 0; turn < MAX_TURNS; turn++) {
         onStatus?.(`Thinking... (step ${turn + 1})`);
 
-        const response = await callLLM(apiKey, model, messages);
+        const response = await callLLMWithFallback(apiKey, models, messages);
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
             return response.content || 'No insights generated.';
@@ -296,36 +301,66 @@ export async function generateInsights(
 
 // ── LLM API call (OpenRouter) ─────────────────────────────────
 
+type LLMResponse = { content: string | null; tool_calls?: ToolCall[] };
+
+async function callLLMWithFallback(
+    apiKey: string,
+    models: string[],
+    messages: Message[]
+): Promise<LLMResponse> {
+    let lastError: Error | null = null;
+    for (const model of models) {
+        try {
+            return await callLLM(apiKey, model, messages);
+        } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            // Only fallback on rate limit, model unavailable, or key limit
+            if (!/429|404|403/.test(lastError.message)) throw lastError;
+        }
+    }
+    throw lastError || new Error('All models failed');
+}
+
 async function callLLM(
     apiKey: string,
     model: string,
     messages: Message[]
-): Promise<{ content: string | null; tool_calls?: ToolCall[] }> {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            model,
-            messages,
-            tools: TOOLS,
-            max_tokens: 4096
-        })
-    });
+): Promise<LLMResponse> {
+    const MAX_RETRIES = 3;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model,
+                messages,
+                tools: TOOLS,
+                max_tokens: 4096
+            })
+        });
 
-    if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`API error ${res.status}: ${body}`);
+        if (res.status === 429 && attempt < MAX_RETRIES - 1) {
+            await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
+            continue;
+        }
+
+        if (!res.ok) {
+            const body = await res.text();
+            throw new Error(`API error ${res.status}: ${body}`);
+        }
+
+        const data = await res.json();
+        const choice = data.choices?.[0]?.message;
+        if (!choice) throw new Error('No response from LLM');
+
+        return {
+            content: choice.content ?? null,
+            tool_calls: choice.tool_calls
+        };
     }
 
-    const data = await res.json();
-    const choice = data.choices?.[0]?.message;
-    if (!choice) throw new Error('No response from LLM');
-
-    return {
-        content: choice.content ?? null,
-        tool_calls: choice.tool_calls
-    };
+    throw new Error('Max retries exceeded');
 }
