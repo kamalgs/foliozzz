@@ -176,6 +176,7 @@ test.describe('FIFO sell logic', () => {
         });
 
         await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
+        await expect(page.locator('#errorSection')).toBeHidden();
 
         const jsErrors = errors.filter(e =>
             e.includes('ReferenceError') ||
@@ -183,6 +184,69 @@ test.describe('FIFO sell logic', () => {
             e.includes('SyntaxError')
         );
         expect(jsErrors, `JS errors: ${jsErrors.join('\n')}`).toHaveLength(0);
+    });
+});
+
+test.describe('OLAP cube materialization', () => {
+    // This test validates that the OLAP cube (dim_calendar, dim_stock,
+    // fact_trades, fact_positions) materializes correctly in DuckDB WASM.
+    // This was the root cause of a production bug: generate_series doesn't
+    // accept subquery parameters in WASM, unlike the Node.js DuckDB driver.
+    const CSV_WITH_SELLS = `transaction_date,isin,quantity,price,type
+2024-01-10,INE002A01018,10,2500,BUY
+2024-03-15,INE009A01013,20,800,BUY
+2024-06-01,INE002A01018,5,3000,SELL
+2024-09-20,INE009A01013,10,900,SELL`;
+
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        await page.waitForLoadState('networkidle');
+    });
+
+    test('cube materializes without Binder Error', async ({ page }) => {
+        const errors = collectConsoleErrors(page);
+        await page.locator('#csvInput').setInputFiles({
+            name: 'transactions.csv',
+            mimeType: 'text/csv',
+            buffer: Buffer.from(CSV_WITH_SELLS),
+        });
+        await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
+        await expect(page.locator('#errorSection')).toBeHidden();
+
+        const binderErrors = errors.filter(e => e.includes('Binder Error'));
+        expect(binderErrors, `Binder errors: ${binderErrors.join('\n')}`).toHaveLength(0);
+    });
+
+    test('stats display correctly after cube materialization', async ({ page }) => {
+        await page.locator('#csvInput').setInputFiles({
+            name: 'transactions.csv',
+            mimeType: 'text/csv',
+            buffer: Buffer.from(CSV_WITH_SELLS),
+        });
+        await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
+        await expect(page.locator('#errorSection')).toBeHidden();
+
+        // Verify stats are populated (not dashes)
+        await expect(page.locator('#totalReturn')).not.toHaveText('-');
+        await expect(page.locator('#portfolioValue')).not.toHaveText('-');
+
+        // Verify realized PnL section shows (we have sells)
+        await expect(page.locator('#pnlGrid')).toBeVisible();
+        await expect(page.locator('#totalRealizedPnL')).not.toHaveText('-');
+        await expect(page.locator('#stocksCount')).not.toHaveText('-');
+    });
+
+    test('AI insights section appears after upload', async ({ page }) => {
+        await page.locator('#csvInput').setInputFiles({
+            name: 'transactions.csv',
+            mimeType: 'text/csv',
+            buffer: Buffer.from(CSV_WITH_SELLS),
+        });
+        await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
+        await expect(page.locator('#errorSection')).toBeHidden();
+
+        await expect(page.locator('#insightsSection')).toBeVisible();
+        await expect(page.locator('h2', { hasText: 'AI Insights' })).toBeVisible();
     });
 });
 

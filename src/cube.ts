@@ -31,12 +31,13 @@ import { FIFO_CTES } from './sql.ts';
 
 export const CREATE_DIM_CALENDAR = `
     CREATE OR REPLACE TABLE dim_calendar AS
-    WITH bounds AS (
+    WITH RECURSIVE bounds AS (
         SELECT MIN(date) AS min_d, MAX(date) AS max_d FROM transactions
     ),
     dates AS (
-        SELECT min_d + INTERVAL (i) DAY AS d
-        FROM bounds, generate_series(0, DATEDIFF('day', (SELECT min_d FROM bounds), (SELECT max_d FROM bounds))) AS t(i)
+        SELECT min_d AS d, max_d FROM bounds
+        UNION ALL
+        SELECT d + INTERVAL 1 DAY, max_d FROM dates WHERE d < max_d
     )
     SELECT
         d::DATE                           AS date,
