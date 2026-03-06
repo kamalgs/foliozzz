@@ -96,15 +96,19 @@
         <!-- AI Insights Section -->
         <section class="insights-section" id="insightsSection" style="display: none;">
             <h2>AI Insights</h2>
-            <div class="insights-config">
-                <div class="form-group">
-                    <label for="apiKey">OpenRouter API Key:</label>
-                    <input type="password" id="apiKey" placeholder="sk-or-..." autocomplete="off">
-                </div>
-                <button id="generateInsights" class="insights-btn" disabled>Generate Insights</button>
-            </div>
             <div class="insights-status" id="insightsStatus" style="display: none;"></div>
             <div class="insights-output" id="insightsOutput"></div>
+            <details class="insights-upgrade">
+                <summary>Use your own API key for deeper analysis</summary>
+                <div class="insights-config">
+                    <div class="form-group">
+                        <label for="apiKey">OpenRouter API Key:</label>
+                        <input type="password" id="apiKey" placeholder="sk-or-..." autocomplete="off">
+                    </div>
+                    <button id="generateInsights" class="insights-btn" disabled>Re-generate with Premium Model</button>
+                </div>
+                <p class="hint">Uses Claude Sonnet via <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a>. Key stays in your browser.</p>
+            </details>
         </section>
 
         <!-- Loading Section -->

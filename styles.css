@@ -396,6 +396,48 @@ footer {
     font-size: 0.85em;
 }
 
+.insights-tier-note {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: #666;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.insights-upgrade {
+    margin-top: 1rem;
+}
+
+.insights-upgrade summary {
+    cursor: pointer;
+    color: #4facfe;
+    font-size: 0.9rem;
+    padding: 0.5rem 0;
+    user-select: none;
+}
+
+.insights-upgrade summary:hover {
+    color: #00f2fe;
+}
+
+.insights-upgrade .insights-config {
+    margin-top: 0.75rem;
+}
+
+.insights-upgrade .hint {
+    margin-top: 0.5rem;
+}
+
+.insights-upgrade .hint a {
+    color: #4facfe;
+    text-decoration: none;
+}
+
+.insights-upgrade .hint a:hover {
+    text-decoration: underline;
+}
+
 /* Stock Details Section */
 .stock-details-section {
     margin-top: 2rem;

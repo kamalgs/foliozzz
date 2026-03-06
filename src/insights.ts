@@ -202,6 +202,25 @@ async function executeTool(db: DB, name: string, args: Record<string, unknown>):
     return json;
 }
 
+// ── Configuration ─────────────────────────────────────────────
+
+// Default key for free-tier insights (rate-limited, free models only)
+// Replace with your own OpenRouter key before deploying
+const DEFAULT_API_KEY = 'OPENROUTER_DEFAULT_KEY';
+
+const FREE_MODEL = 'openrouter/free';
+const PREMIUM_MODEL = 'anthropic/claude-sonnet-4';
+
+export interface InsightsConfig {
+    apiKey?: string;   // user-provided key → premium model
+    model?: string;    // override model
+}
+
+export function getDefaultKey(): string { return DEFAULT_API_KEY; }
+export function hasDefaultKey(): boolean {
+    return DEFAULT_API_KEY.length > 0 && !DEFAULT_API_KEY.startsWith('OPENROUTER_');
+}
+
 // ── System prompt ─────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are a concise portfolio analyst. You have access to a user's stock trading data through analysis tools.
@@ -226,9 +245,16 @@ const MAX_TURNS = 8;
 
 export async function generateInsights(
     db: DB,
-    apiKey: string,
+    config: InsightsConfig,
     onStatus?: (msg: string) => void
 ): Promise<string> {
+    const apiKey = config.apiKey || DEFAULT_API_KEY;
+    const model = config.model || (config.apiKey ? PREMIUM_MODEL : FREE_MODEL);
+
+    if (!apiKey || apiKey.startsWith('OPENROUTER_')) {
+        throw new Error('No API key configured. Please enter your OpenRouter API key.');
+    }
+
     const messages: Message[] = [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: 'Analyze my portfolio and provide key insights.' }
@@ -237,21 +263,18 @@ export async function generateInsights(
     for (let turn = 0; turn < MAX_TURNS; turn++) {
         onStatus?.(`Thinking... (step ${turn + 1})`);
 
-        const response = await callLLM(apiKey, messages);
+        const response = await callLLM(apiKey, model, messages);
 
         if (!response.tool_calls || response.tool_calls.length === 0) {
-            // Final text response
             return response.content || 'No insights generated.';
         }
 
-        // Add assistant message with tool calls
         messages.push({
             role: 'assistant',
             content: response.content,
             tool_calls: response.tool_calls
         });
 
-        // Execute each tool call and add results
         for (const tc of response.tool_calls) {
             onStatus?.(`Querying: ${tc.function.name}...`);
             let result: string;
@@ -276,6 +299,7 @@ export async function generateInsights(
 
 async function callLLM(
     apiKey: string,
+    model: string,
     messages: Message[]
 ): Promise<{ content: string | null; tool_calls?: ToolCall[] }> {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -285,7 +309,7 @@ async function callLLM(
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            model: 'anthropic/claude-sonnet-4',
+            model,
             messages,
             tools: TOOLS,
             max_tokens: 4096

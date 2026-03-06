@@ -1,7 +1,7 @@
 import { initDuckDB, runQuery, isReady, asDB } from './duckdb-module.ts';
 import { parseCSV } from './portfolio.ts';
 import { loadTransactions, getStats, getTimeSeries } from './analysis.ts';
-import { generateInsights } from './insights.ts';
+import { generateInsights, hasDefaultKey } from './insights.ts';
 import type { Transaction, PortfolioStats, TimeSeriesPoint } from './types.ts';
 
 declare const Chart: {
@@ -112,6 +112,14 @@ async function runAnalysis(): Promise<void> {
         renderResults(stats, timeSeries, benchmarkReturns);
         elements.insightsSection.style.display = 'block';
         hideLoading();
+
+        if (hasDefaultKey()) {
+            runInsights();
+        } else {
+            // No default key — open the API key input
+            const details = document.querySelector('.insights-upgrade') as HTMLDetailsElement;
+            if (details) details.open = true;
+        }
     } catch (error) {
         hideLoading();
         showError('Analysis error: ' + (error instanceof Error ? error.message : String(error)));
@@ -236,27 +244,38 @@ function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkR
     });
 }
 
-async function handleGenerateInsights(): Promise<void> {
-    const apiKey = elements.apiKey.value.trim();
-    if (!apiKey || !currentTransactions) return;
+async function runInsights(userApiKey?: string): Promise<void> {
+    if (!currentTransactions) return;
 
     elements.generateInsightsBtn.disabled = true;
     elements.insightsStatus.style.display = 'block';
     elements.insightsOutput.textContent = '';
+    elements.insightsOutput.className = 'insights-output';
+
+    const isPremium = !!userApiKey;
 
     try {
-        const result = await generateInsights(asDB(), apiKey, (msg) => {
-            elements.insightsStatus.textContent = msg;
-        });
+        const result = await generateInsights(
+            asDB(),
+            userApiKey ? { apiKey: userApiKey } : {},
+            (msg) => { elements.insightsStatus.textContent = msg; }
+        );
         elements.insightsStatus.style.display = 'none';
-        elements.insightsOutput.innerHTML = renderMarkdown(result);
+        elements.insightsOutput.innerHTML = renderMarkdown(result)
+            + (isPremium ? '' : '<p class="insights-tier-note">Generated with free model. Enter your OpenRouter API key below for deeper analysis.</p>');
     } catch (err) {
         elements.insightsStatus.style.display = 'none';
         elements.insightsOutput.textContent = 'Error: ' + (err instanceof Error ? err.message : String(err));
         elements.insightsOutput.className = 'insights-output error';
     } finally {
-        elements.generateInsightsBtn.disabled = false;
+        elements.generateInsightsBtn.disabled = !elements.apiKey.value.trim();
     }
+}
+
+async function handleGenerateInsights(): Promise<void> {
+    const apiKey = elements.apiKey.value.trim();
+    if (!apiKey) return;
+    await runInsights(apiKey);
 }
 
 function renderMarkdown(md: string): string {
