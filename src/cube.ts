@@ -31,6 +31,13 @@ import { FIFO_CTES } from './sql.ts';
 
 export const CREATE_DIM_CALENDAR = `
     CREATE OR REPLACE TABLE dim_calendar AS
+    WITH bounds AS (
+        SELECT MIN(date) AS min_d, MAX(date) AS max_d FROM transactions
+    ),
+    dates AS (
+        SELECT min_d + INTERVAL (i) DAY AS d
+        FROM bounds, generate_series(0, DATEDIFF('day', (SELECT min_d FROM bounds), (SELECT max_d FROM bounds))) AS t(i)
+    )
     SELECT
         d::DATE                           AS date,
         EXTRACT(year    FROM d)::INTEGER  AS year,
@@ -41,11 +48,7 @@ export const CREATE_DIM_CALENDAR = `
         STRFTIME(d, '%Y-%m')              AS year_month,
         STRFTIME(d, '%Y-W') || LPAD(EXTRACT(week FROM d)::VARCHAR, 2, '0') AS year_week,
         STRFTIME(d, '%Y-Q') || EXTRACT(quarter FROM d) AS year_quarter
-    FROM generate_series(
-        (SELECT MIN(date) FROM transactions),
-        (SELECT MAX(date) FROM transactions),
-        INTERVAL 1 DAY
-    ) AS t(d)`;
+    FROM dates`;
 
 export const CREATE_DIM_STOCK = `
     CREATE OR REPLACE TABLE dim_stock AS
