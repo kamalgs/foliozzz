@@ -44,7 +44,6 @@ test.describe('Page load', () => {
     test('shows all main sections', async ({ page }) => {
         await page.goto('/');
         await expect(page.locator('h2', { hasText: 'Upload Transactions' })).toBeVisible();
-        await expect(page.locator('h2', { hasText: 'Configuration' })).toBeVisible();
         await expect(page.locator('h2', { hasText: 'Performance Analysis' })).toBeVisible();
         await expect(page.locator('h2', { hasText: 'Returns Comparison' })).toBeVisible();
     });
@@ -60,9 +59,9 @@ test.describe('Page load', () => {
         await page.goto('/');
         const options = page.locator('#benchmarkSelect option');
         await expect(options).toHaveCount(5);
-        await expect(options.nth(0)).toHaveText('NIFTY 50');
-        await expect(options.nth(1)).toHaveText('NIFTY BANK');
-        await expect(options.nth(2)).toHaveText('SENSEX');
+        await expect(options.nth(0)).toHaveText('vs NIFTY 50');
+        await expect(options.nth(1)).toHaveText('vs NIFTY BANK');
+        await expect(options.nth(2)).toHaveText('vs SENSEX');
     });
 
     test('no ReferenceError for module', async ({ page }) => {
@@ -246,7 +245,7 @@ test.describe('OLAP cube materialization', () => {
         await expect(page.locator('#errorSection')).toBeHidden();
 
         await expect(page.locator('#insightsSection')).toBeVisible();
-        await expect(page.locator('h2', { hasText: 'AI Insights' })).toBeVisible();
+        await expect(page.locator('.insights-label')).toBeVisible();
     });
 });
 

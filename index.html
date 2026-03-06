@@ -16,11 +16,13 @@
         <!-- AI Insights Section (shown after upload, replaces upload section) -->
         <section class="insights-section" id="insightsSection" style="display: none;">
             <div class="insights-header">
-                <h2>AI Insights</h2>
+                <span class="insights-label">AI Insights</span>
                 <button id="changeFile" class="change-file-btn">Change CSV</button>
             </div>
             <div class="insights-status" id="insightsStatus" style="display: none;"></div>
-            <div class="insights-output" id="insightsOutput"></div>
+            <div class="insights-summary" id="insightsSummary"></div>
+            <div class="insights-full" id="insightsFull" style="display: none;"></div>
+            <button class="insights-toggle" id="insightsToggle" style="display: none;">Show more</button>
             <details class="insights-upgrade">
                 <summary>Use your own API key for deeper analysis</summary>
                 <div class="insights-config">
@@ -41,27 +43,6 @@
                 <input type="file" id="csvInput" accept=".csv" class="file-input">
                 <p class="hint">CSV Format: transaction_date,isin,quantity,price,type (e.g., 2024-01-15,INE002A01018,10,2500,BUY)</p>
                 <p class="hint">Type: BUY or SELL (FIFO cost basis tracking enabled)</p>
-            </div>
-        </section>
-
-        <!-- Configuration Section -->
-        <section class="config-section">
-            <h2>Configuration</h2>
-            <div class="config-container">
-                <div class="form-group">
-                    <label for="benchmarkSelect">Benchmark Index:</label>
-                    <select id="benchmarkSelect">
-                        <option value="nifty50">NIFTY 50</option>
-                        <option value="bank_nifty">NIFTY BANK</option>
-                        <option value="sensex">SENSEX</option>
-                        <option value="nifty_midcap">NIFTY MIDCAP 100</option>
-                        <option value="bse_500">BSE 500</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="initialCapital">Initial Capital (₹):</label>
-                    <input type="number" id="initialCapital" value="100000" min="0">
-                </div>
             </div>
         </section>
 
@@ -108,7 +89,16 @@
 
         <!-- Chart Section -->
         <section class="chart-section">
-            <h2>Returns Comparison</h2>
+            <div class="chart-header">
+                <h2>Returns Comparison</h2>
+                <select id="benchmarkSelect" class="benchmark-select">
+                    <option value="nifty50">vs NIFTY 50</option>
+                    <option value="bank_nifty">vs NIFTY BANK</option>
+                    <option value="sensex">vs SENSEX</option>
+                    <option value="nifty_midcap">vs NIFTY MIDCAP 100</option>
+                    <option value="bse_500">vs BSE 500</option>
+                </select>
+            </div>
             <div class="chart-container">
                 <canvas id="returnsChart"></canvas>
             </div>

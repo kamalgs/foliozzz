@@ -29,10 +29,11 @@ const CONFIG = {
 let chart: ChartInstance | null = null;
 let currentTransactions: Transaction[] | null = null;
 
+const INITIAL_CAPITAL = 100000;
+
 const elements = {
     csvInput: document.getElementById('csvInput') as HTMLInputElement,
     benchmarkSelect: document.getElementById('benchmarkSelect') as HTMLSelectElement,
-    initialCapital: document.getElementById('initialCapital') as HTMLInputElement,
     loadingSection: document.getElementById('loadingSection') as HTMLElement,
     loadingText: document.getElementById('loadingText') as HTMLElement,
     errorSection: document.getElementById('errorSection') as HTMLElement,
@@ -41,10 +42,12 @@ const elements = {
     uploadSection: document.getElementById('uploadSection') as HTMLElement,
     changeFileBtn: document.getElementById('changeFile') as HTMLButtonElement,
     insightsSection: document.getElementById('insightsSection') as HTMLElement,
+    insightsSummary: document.getElementById('insightsSummary') as HTMLElement,
+    insightsFull: document.getElementById('insightsFull') as HTMLElement,
+    insightsToggle: document.getElementById('insightsToggle') as HTMLButtonElement,
     apiKey: document.getElementById('apiKey') as HTMLInputElement,
     generateInsightsBtn: document.getElementById('generateInsights') as HTMLButtonElement,
     insightsStatus: document.getElementById('insightsStatus') as HTMLElement,
-    insightsOutput: document.getElementById('insightsOutput') as HTMLElement
 };
 
 async function init(): Promise<void> {
@@ -71,6 +74,11 @@ function setupEventListeners(): void {
         elements.generateInsightsBtn.disabled = !elements.apiKey.value.trim();
     });
     elements.generateInsightsBtn.addEventListener('click', handleGenerateInsights);
+    elements.insightsToggle.addEventListener('click', () => {
+        const expanded = elements.insightsFull.style.display !== 'none';
+        elements.insightsFull.style.display = expanded ? 'none' : 'block';
+        elements.insightsToggle.textContent = expanded ? 'Show more' : 'Show less';
+    });
     elements.changeFileBtn.addEventListener('click', () => {
         elements.insightsSection.style.display = 'none';
         elements.uploadSection.style.display = 'block';
@@ -115,13 +123,12 @@ async function runAnalysis(): Promise<void> {
     showLoading('Analyzing portfolio...');
 
     try {
-        const initialCapital = parseFloat(elements.initialCapital.value) || 100000;
         const db = asDB();
 
-        const stats = await getStats(db, initialCapital);
+        const stats = await getStats(db, INITIAL_CAPITAL);
         if (!stats) { showError('No portfolio data available for analysis'); hideLoading(); return; }
 
-        const timeSeries = await getTimeSeries(db, initialCapital);
+        const timeSeries = await getTimeSeries(db, INITIAL_CAPITAL);
         const benchmarkReturns = await calculateBenchmarkReturns(elements.benchmarkSelect.value);
 
         renderResults(stats, timeSeries, benchmarkReturns);
@@ -281,8 +288,10 @@ async function runInsights(userApiKey?: string): Promise<void> {
 
     elements.generateInsightsBtn.disabled = true;
     elements.insightsStatus.style.display = 'block';
-    elements.insightsOutput.textContent = '';
-    elements.insightsOutput.className = 'insights-output';
+    elements.insightsSummary.textContent = '';
+    elements.insightsSummary.className = 'insights-summary';
+    elements.insightsFull.style.display = 'none';
+    elements.insightsToggle.style.display = 'none';
 
     const isPremium = !!userApiKey;
 
@@ -293,12 +302,23 @@ async function runInsights(userApiKey?: string): Promise<void> {
             (msg) => { elements.insightsStatus.textContent = msg; }
         );
         elements.insightsStatus.style.display = 'none';
-        elements.insightsOutput.innerHTML = renderMarkdown(result)
-            + (isPremium ? '' : '<p class="insights-tier-note">Generated with free model. Enter your OpenRouter API key below for deeper analysis.</p>');
+
+        // Split into bullet lines, show first 2 as summary, rest behind "Show more"
+        const bullets = result.split('\n').filter(l => l.trim().startsWith('-'));
+        const summaryMd = bullets.slice(0, 2).join('\n');
+        const restMd = bullets.slice(2).join('\n');
+
+        elements.insightsSummary.innerHTML = renderMarkdown(summaryMd);
+        if (restMd.trim()) {
+            elements.insightsFull.innerHTML = renderMarkdown(restMd)
+                + (isPremium ? '' : '<p class="insights-tier-note">Free model. Use your own API key for deeper analysis.</p>');
+            elements.insightsToggle.style.display = 'inline-block';
+            elements.insightsToggle.textContent = 'Show more';
+        }
     } catch (err) {
         elements.insightsStatus.style.display = 'none';
-        elements.insightsOutput.textContent = 'Error: ' + (err instanceof Error ? err.message : String(err));
-        elements.insightsOutput.className = 'insights-output error';
+        elements.insightsSummary.textContent = 'Error: ' + (err instanceof Error ? err.message : String(err));
+        elements.insightsSummary.className = 'insights-summary error';
     } finally {
         elements.generateInsightsBtn.disabled = !elements.apiKey.value.trim();
     }
