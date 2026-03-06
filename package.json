@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit && esbuild src/app.ts --bundle --minify --format=esm --outfile=app.js --external:https://* && esbuild src/duckdb-module.ts --bundle --minify --format=esm --outfile=duckdb-module.js --external:https://*",
-    "test": "node --experimental-strip-types --test tests/portfolio.test.ts && playwright test",
-    "test:unit": "node --experimental-strip-types --test tests/portfolio.test.ts",
+    "test": "node --experimental-strip-types --experimental-transform-types --test tests/portfolio.test.ts && playwright test",
+    "test:unit": "node --experimental-strip-types --experimental-transform-types --test tests/portfolio.test.ts",
     "test:e2e": "playwright test"
   },
   "repository": {
@@ -26,6 +26,7 @@
   "homepage": "https://github.com/kamalgs/foliozzz#readme",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "duckdb": "^1.4.4",
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3"
   }

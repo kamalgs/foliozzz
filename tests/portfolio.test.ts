@@ -1,11 +1,43 @@
-import { describe, it } from 'node:test';
-import { strictEqual, deepStrictEqual, ok } from 'node:assert';
-import { parseCSV, buildLots, processSells, computeStats, buildTimeSeries } from '../src/portfolio.ts';
-import type { Transaction, Lot, SellDetail, PortfolioStats, TimeSeriesPoint } from '../src/portfolio.ts';
+import { describe, it, beforeEach } from 'node:test';
+import { strictEqual, ok } from 'node:assert';
+import { createRequire } from 'node:module';
+import { parseCSV } from '../src/portfolio.ts';
+import { loadTransactions, getStats, getTimeSeries, getHoldings, getSellDetails } from '../src/analysis.ts';
+import type { DB } from '../src/types.ts';
+
+// DuckDB Node.js bindings (CJS package)
+const require = createRequire(import.meta.url);
+const duckdb = require('duckdb');
 
 function assertClose(actual: number, expected: number, eps: number, msg?: string): void {
     ok(Math.abs(actual - expected) <= eps,
         msg || `Expected ~${expected}, got ${actual} (diff ${Math.abs(actual - expected)} > ${eps})`);
+}
+
+// Wrap DuckDB Node callback API into our DB interface
+function createDB(): DB {
+    const instance = new duckdb.Database(':memory:');
+    const connection = instance.connect();
+    return {
+        exec(sql: string): Promise<void> {
+            return new Promise((resolve, reject) => {
+                connection.run(sql, (err: Error | null) => err ? reject(err) : resolve());
+            });
+        },
+        query(sql: string): Promise<Record<string, unknown>[]> {
+            return new Promise((resolve, reject) => {
+                connection.all(sql, (err: Error | null, rows: Record<string, unknown>[]) =>
+                    err ? reject(err) : resolve(rows));
+            });
+        }
+    };
+}
+
+// Helper: parse CSV + load into DuckDB
+async function loadCSV(db: DB, csv: string): Promise<void> {
+    const txns = parseCSV(csv);
+    txns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    await loadTransactions(db, txns);
 }
 
 const SAMPLE_CSV = `transaction_date,isin,quantity,price,type
@@ -43,46 +75,35 @@ describe('parseCSV', () => {
     });
 
     it('parses rows without header', () => {
-        const txns = parseCSV('2024-01-15,INE002A01018,10,2500,BUY');
-        strictEqual(txns.length, 1);
+        strictEqual(parseCSV('2024-01-15,INE002A01018,10,2500,BUY').length, 1);
     });
 });
 
-// ── buildLots ────────────────────────────────────────────────
-
-describe('buildLots', () => {
-    it('filters only BUY transactions', () => {
-        const lots = buildLots(parseCSV(SAMPLE_CSV));
-        strictEqual(lots.length, 3);
-        strictEqual(lots[0].shares, 10);
-        strictEqual(lots[0].costBasis, 2500);
-        strictEqual(lots[2].isin, 'INE009A01013');
-    });
-});
-
-// ── FIFO sell matching ───────────────────────────────────────
+// ── FIFO sell matching (SQL) ─────────────────────────────────
 
 describe('FIFO sell matching', () => {
-    it('basic single sell', () => {
-        const txns = parseCSV(`date,isin,qty,price,type
+    let db: DB;
+    beforeEach(() => { db = createDB(); });
+
+    it('basic single sell', async () => {
+        await loadCSV(db, `date,isin,qty,price,type
 2024-01-10,X,10,100,BUY
 2024-06-01,X,5,150,SELL`);
-        const lots = buildLots(txns);
-        const details = processSells(lots, txns);
+        const details = await getSellDetails(db);
         strictEqual(details.length, 1);
         strictEqual(details[0].sharesSold, 5);
         strictEqual(details[0].costBasis, 100);
         strictEqual(details[0].pnl, 250);
-        strictEqual(lots[0].shares, 5);
+        const holdings = await getHoldings(db);
+        strictEqual(holdings[0].shares, 5);
     });
 
-    it('sell spans two lots', () => {
-        const txns = parseCSV(`date,isin,quantity,price,type
+    it('sell spans two lots', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,3,100,BUY
 2024-02-01,X,5,120,BUY
 2024-06-01,X,4,150,SELL`);
-        const lots = buildLots(txns);
-        const details = processSells(lots, txns);
+        const details = await getSellDetails(db);
         strictEqual(details.length, 2);
         strictEqual(details[0].sharesSold, 3);
         strictEqual(details[0].costBasis, 100);
@@ -90,57 +111,66 @@ describe('FIFO sell matching', () => {
         strictEqual(details[1].sharesSold, 1);
         strictEqual(details[1].costBasis, 120);
         strictEqual(details[1].pnl, 30);
-        strictEqual(lots[0].shares, 0);
-        strictEqual(lots[1].shares, 4);
+        const holdings = await getHoldings(db);
+        strictEqual(holdings[0].shares, 4);
     });
 
-    it('sell at a loss', () => {
-        const txns = parseCSV(`date,isin,quantity,price,type
+    it('sell at a loss', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,200,BUY
 2024-06-01,X,4,150,SELL`);
-        const lots = buildLots(txns);
-        const details = processSells(lots, txns);
+        const details = await getSellDetails(db);
         strictEqual(details[0].pnl, -200);
     });
 
-    it('multiple ISINs are independent', () => {
-        const txns = parseCSV(`date,isin,quantity,price,type
+    it('multiple ISINs are independent', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,A,10,100,BUY
 2024-01-01,B,10,200,BUY
 2024-06-01,B,5,250,SELL`);
-        const lots = buildLots(txns);
-        const details = processSells(lots, txns);
+        const details = await getSellDetails(db);
         strictEqual(details.length, 1);
         strictEqual(details[0].isin, 'B');
         strictEqual(details[0].costBasis, 200);
-        strictEqual(lots[0].shares, 10);
-        strictEqual(lots[1].shares, 5);
+        const holdings = await getHoldings(db);
+        const a = holdings.find(h => h.isin === 'A')!;
+        const b = holdings.find(h => h.isin === 'B')!;
+        strictEqual(a.shares, 10);
+        strictEqual(b.shares, 5);
     });
 
-    it('sell all shares', () => {
-        const txns = parseCSV(`date,isin,quantity,price,type
+    it('sell all shares', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,100,BUY
 2024-06-01,X,10,120,SELL`);
-        const lots = buildLots(txns);
-        processSells(lots, txns);
-        strictEqual(lots[0].shares, 0);
+        const holdings = await getHoldings(db);
+        strictEqual(holdings.length, 0);
     });
 
-    it('multiple sells deplete lots correctly', () => {
-        const lots = buildLots(parseCSV(SAMPLE_CSV));
-        const details = processSells(lots, parseCSV(SAMPLE_CSV));
-        strictEqual(lots[0].shares, 2);
-        strictEqual(lots[1].shares, 5);
-        strictEqual(lots[2].shares, 20);
-        strictEqual(details.reduce((s, d) => s + d.pnl, 0), 1900);
+    it('multiple sells deplete lots correctly', async () => {
+        await loadCSV(db, SAMPLE_CSV);
+        const holdings = await getHoldings(db);
+        const ine002 = holdings.filter(h => h.isin === 'INE002A01018');
+        const ine009 = holdings.filter(h => h.isin === 'INE009A01013');
+        // Lot 1: 10 - 8 sold = 2, Lot 2: 5 untouched
+        strictEqual(ine002.find(h => h.costBasis === 2500)!.shares, 2);
+        strictEqual(ine002.find(h => h.costBasis === 2600)!.shares, 5);
+        strictEqual(ine009[0].shares, 20);
+        const details = await getSellDetails(db);
+        const totalPnl = details.reduce((s, d) => s + d.pnl, 0);
+        strictEqual(totalPnl, 1900);
     });
 });
 
-// ── computeStats ─────────────────────────────────────────────
+// ── Portfolio stats (SQL) ────────────────────────────────────
 
-describe('computeStats', () => {
-    it('sample CSV with capital=100000', () => {
-        const s = computeStats(parseCSV(SAMPLE_CSV), 100000)!;
+describe('getStats', () => {
+    let db: DB;
+    beforeEach(() => { db = createDB(); });
+
+    it('sample CSV with capital=100000', async () => {
+        await loadCSV(db, SAMPLE_CSV);
+        const s = (await getStats(db, 100000))!;
         strictEqual(s.totalInvested, 67000);
         strictEqual(s.totalProceeds, 21900);
         strictEqual(s.realizedPnL, 1900);
@@ -154,11 +184,11 @@ describe('computeStats', () => {
         assertClose(s.annualizedReturnPct, 2.074, 0.1);
     });
 
-    it('buy-only portfolio: value equals initial capital', () => {
-        const csv = `date,isin,quantity,price,type
+    it('buy-only portfolio: value equals initial capital', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-15,X,10,2500,BUY
-2024-02-20,Y,20,1450,BUY`;
-        const s = computeStats(parseCSV(csv), 100000)!;
+2024-02-20,Y,20,1450,BUY`);
+        const s = (await getStats(db, 100000))!;
         strictEqual(s.totalInvested, 54000);
         strictEqual(s.totalProceeds, 0);
         strictEqual(s.realizedPnL, 0);
@@ -169,11 +199,11 @@ describe('computeStats', () => {
         strictEqual(s.numStocks, 2);
     });
 
-    it('sell everything at profit', () => {
-        const csv = `date,isin,quantity,price,type
+    it('sell everything at profit', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,100,BUY
-2024-06-01,X,10,150,SELL`;
-        const s = computeStats(parseCSV(csv), 10000)!;
+2024-06-01,X,10,150,SELL`);
+        const s = (await getStats(db, 10000))!;
         strictEqual(s.totalInvested, 1000);
         strictEqual(s.totalProceeds, 1500);
         strictEqual(s.realizedPnL, 500);
@@ -185,39 +215,46 @@ describe('computeStats', () => {
         strictEqual(s.numStocks, 0);
     });
 
-    it('sell everything at loss', () => {
-        const csv = `date,isin,quantity,price,type
+    it('sell everything at loss', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,200,BUY
-2024-06-01,X,10,150,SELL`;
-        const s = computeStats(parseCSV(csv), 10000)!;
+2024-06-01,X,10,150,SELL`);
+        const s = (await getStats(db, 10000))!;
         strictEqual(s.realizedPnL, -500);
         strictEqual(s.portfolioValue, 9500);
         strictEqual(s.totalReturn, -500);
     });
 
-    it('returns null for empty transactions', () => {
-        strictEqual(computeStats([], 100000), null);
+    it('returns null for empty transactions', async () => {
+        await loadTransactions(db, []);
+        const s = await getStats(db, 100000);
+        strictEqual(s, null);
     });
 
-    it('totalReturn equals realizedPnL at cost valuation', () => {
-        const s = computeStats(parseCSV(SAMPLE_CSV), 100000)!;
+    it('totalReturn equals realizedPnL at cost valuation', async () => {
+        await loadCSV(db, SAMPLE_CSV);
+        const s = (await getStats(db, 100000))!;
         strictEqual(s.totalReturn, s.realizedPnL);
     });
 
-    it('cash + holdings = portfolioValue', () => {
-        const s = computeStats(parseCSV(SAMPLE_CSV), 100000)!;
+    it('cash + holdings = portfolioValue', async () => {
+        await loadCSV(db, SAMPLE_CSV);
+        const s = (await getStats(db, 100000))!;
         strictEqual(s.cashBalance + s.costBasisRemaining, s.portfolioValue);
     });
 });
 
-// ── buildTimeSeries ──────────────────────────────────────────
+// ── Time series (SQL) ────────────────────────────────────────
 
-describe('buildTimeSeries', () => {
-    it('buy-only stays flat at cost', () => {
-        const csv = `date,isin,quantity,price,type
+describe('getTimeSeries', () => {
+    let db: DB;
+    beforeEach(() => { db = createDB(); });
+
+    it('buy-only stays flat at cost', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-15,X,10,100,BUY
-2024-02-15,Y,5,200,BUY`;
-        const ts = buildTimeSeries(parseCSV(csv), 10000);
+2024-02-15,Y,5,200,BUY`);
+        const ts = await getTimeSeries(db, 10000);
         strictEqual(ts.length, 2);
         strictEqual(ts[0].portfolioValue, 10000);
         strictEqual(ts[0].cash, 9000);
@@ -225,11 +262,11 @@ describe('buildTimeSeries', () => {
         strictEqual(ts[1].returnPct, 0);
     });
 
-    it('sell at profit increases value', () => {
-        const csv = `date,isin,quantity,price,type
+    it('sell at profit increases value', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,100,BUY
-2024-06-01,X,5,150,SELL`;
-        const ts = buildTimeSeries(parseCSV(csv), 10000);
+2024-06-01,X,5,150,SELL`);
+        const ts = await getTimeSeries(db, 10000);
         strictEqual(ts[0].portfolioValue, 10000);
         strictEqual(ts[1].cash, 9750);
         strictEqual(ts[1].holdingsCost, 500);
@@ -237,17 +274,18 @@ describe('buildTimeSeries', () => {
         assertClose(ts[1].returnPct, 2.5, 0.01);
     });
 
-    it('sell at loss decreases value', () => {
-        const csv = `date,isin,quantity,price,type
+    it('sell at loss decreases value', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10,200,BUY
-2024-06-01,X,10,150,SELL`;
-        const ts = buildTimeSeries(parseCSV(csv), 10000);
+2024-06-01,X,10,150,SELL`);
+        const ts = await getTimeSeries(db, 10000);
         strictEqual(ts[1].portfolioValue, 9500);
         assertClose(ts[1].returnPct, -5, 0.01);
     });
 
-    it('FIFO lot consumption across days', () => {
-        const ts = buildTimeSeries(parseCSV(SAMPLE_CSV), 100000);
+    it('FIFO lot consumption across days', async () => {
+        await loadCSV(db, SAMPLE_CSV);
+        const ts = await getTimeSeries(db, 100000);
 
         strictEqual(ts[0].cash, 75000);
         strictEqual(ts[0].holdingsCost, 25000);
@@ -271,42 +309,47 @@ describe('buildTimeSeries', () => {
         assertClose(ts[4].returnPct, 1.9, 0.01);
     });
 
-    it('empty transactions returns []', () => {
-        strictEqual(buildTimeSeries([], 100000).length, 0);
+    it('empty transactions returns []', async () => {
+        await loadTransactions(db, []);
+        const ts = await getTimeSeries(db, 100000);
+        strictEqual(ts.length, 0);
     });
 });
 
 // ── Edge cases ───────────────────────────────────────────────
 
 describe('Edge cases', () => {
-    it('fractional shares', () => {
-        const csv = `date,isin,quantity,price,type
+    let db: DB;
+    beforeEach(() => { db = createDB(); });
+
+    it('fractional shares', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,10.5,100,BUY
-2024-06-01,X,3.5,120,SELL`;
-        const s = computeStats(parseCSV(csv), 50000)!;
+2024-06-01,X,3.5,120,SELL`);
+        const s = (await getStats(db, 50000))!;
         strictEqual(s.totalInvested, 1050);
         strictEqual(s.totalProceeds, 420);
         assertClose(s.realizedPnL, 70, 0.001);
         strictEqual(s.holdings[0].shares, 7);
     });
 
-    it('multiple sells same day same ISIN', () => {
-        const csv = `date,isin,quantity,price,type
+    it('multiple sells same day same ISIN', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,20,100,BUY
 2024-06-01,X,5,120,SELL
-2024-06-01,X,3,130,SELL`;
-        const s = computeStats(parseCSV(csv), 50000)!;
+2024-06-01,X,3,130,SELL`);
+        const s = (await getStats(db, 50000))!;
         strictEqual(s.realizedPnL, 190);
         strictEqual(s.holdings[0].shares, 12);
     });
 
-    it('sell spanning three lots', () => {
-        const csv = `date,isin,quantity,price,type
+    it('sell spanning three lots', async () => {
+        await loadCSV(db, `date,isin,quantity,price,type
 2024-01-01,X,5,100,BUY
 2024-02-01,X,5,110,BUY
 2024-03-01,X,5,120,BUY
-2024-06-01,X,12,150,SELL`;
-        const s = computeStats(parseCSV(csv), 50000)!;
+2024-06-01,X,12,150,SELL`);
+        const s = (await getStats(db, 50000))!;
         strictEqual(s.realizedPnL, 5 * 50 + 5 * 40 + 2 * 30);  // 510
         strictEqual(s.holdings[0].shares, 3);
         strictEqual(s.holdings[0].costBasis, 120);

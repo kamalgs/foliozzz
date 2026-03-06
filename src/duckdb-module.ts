@@ -1,18 +1,8 @@
-// Type declarations for @duckdb/duckdb-wasm loaded via CDN
-// We declare just enough to type-check our usage without installing the full package.
+import type { DB } from './types.ts';
 
-interface ArrowField {
-    name: string;
-}
-
-interface ArrowSchema {
-    fields: ArrowField[];
-}
-
-interface ArrowColumn {
-    get(index: number): unknown;
-}
-
+interface ArrowField { name: string; }
+interface ArrowSchema { fields: ArrowField[]; }
+interface ArrowColumn { get(index: number): unknown; }
 interface ArrowTable {
     schema: ArrowSchema;
     numRows: number;
@@ -43,8 +33,6 @@ interface DuckDBModule {
     AsyncDuckDB: new (logger: unknown, worker: Worker) => DuckDBInstance;
 }
 
-// The CDN URL import — TypeScript can't resolve this, so we use a dynamic import
-// and cast to our interface. The compiled JS will keep the URL string as-is.
 const DUCKDB_CDN_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
 
 let duckdbModule: DuckDBModule | null = null;
@@ -75,14 +63,8 @@ export async function initDuckDB(): Promise<void> {
     conn = await db.connect();
 }
 
-export function getConnection(): DuckDBConnection {
-    if (!conn) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
-    return conn;
-}
-
-export function getDB(): DuckDBInstance {
-    if (!db) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
-    return db;
+export function isReady(): boolean {
+    return conn !== null;
 }
 
 export async function runSQL(sql: string): Promise<void> {
@@ -96,11 +78,29 @@ export async function runQuery(sql: string): Promise<Record<string, unknown>[]> 
     return arrowToObjects(arrowResult);
 }
 
+export function getConnection(): DuckDBConnection {
+    if (!conn) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
+    return conn;
+}
+
+export function getDB(): DuckDBInstance {
+    if (!db) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
+    return db;
+}
+
+export async function closeDuckDB(): Promise<void> {
+    if (conn) { await conn.close(); conn = null; }
+    if (db) { await db.terminate(); db = null; }
+}
+
+export function asDB(): DB {
+    return { exec: runSQL, query: runQuery };
+}
+
 function arrowToObjects(arrowTable: ArrowTable): Record<string, unknown>[] {
     const rows: Record<string, unknown>[] = [];
     const schema = arrowTable.schema.fields;
     const numRows = arrowTable.numRows;
-
     for (let i = 0; i < numRows; i++) {
         const row: Record<string, unknown> = {};
         for (const field of schema) {
@@ -128,19 +128,4 @@ function convertArrowValue(val: unknown): unknown {
         return Number(val);
     }
     return val;
-}
-
-export function isReady(): boolean {
-    return conn !== null;
-}
-
-export async function closeDuckDB(): Promise<void> {
-    if (conn) {
-        await conn.close();
-        conn = null;
-    }
-    if (db) {
-        await db.terminate();
-        db = null;
-    }
 }
