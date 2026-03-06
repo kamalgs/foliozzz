@@ -1,5 +1,5 @@
-var F="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm",S=null,_=null,u=null;async function $(){return S||(S=await import(F),S)}async function w(){if(u)return;let e=await $(),r=e.getJsDelivrBundles(),n=await e.selectBundle(r),t=URL.createObjectURL(new Blob([`importScripts("${n.mainWorker}");`],{type:"text/javascript"})),o=new Worker(t),a=new e.ConsoleLogger;_=new e.AsyncDuckDB(a,o),await _.instantiate(n.mainModule,n.pthreadWorker),u=await _.connect()}function L(){return u!==null}async function z(e){if(!u)throw new Error("DuckDB not initialized. Call initDuckDB() first.");await u.query(e)}async function g(e){if(!u)throw new Error("DuckDB not initialized. Call initDuckDB() first.");let r=await u.query(e);return W(r)}function b(){return{exec:z,query:g}}function W(e){let r=[],n=e.schema.fields,t=e.numRows;for(let o=0;o<t;o++){let a={};for(let i of n){let s=e.getChild(i.name);a[i.name]=V(s.get(o))}r.push(a)}return r}function V(e){if(e==null)return e;if(typeof e=="bigint")return Number(e);if(typeof e=="object"&&e!==null&&!(e instanceof Date)){let r=e;if(typeof r.toString=="function"){let n=r.toString();if(n!==""&&n!=="[object Object]"&&!isNaN(Number(n)))return Number(n)}}return typeof e=="string"&&e!==""&&!isNaN(Number(e))?Number(e):e}function R(e){let r=e.trim().split(`
-`),n=[],t=r[0].toLowerCase(),a=t.includes("date")||t.includes("isin")?1:0;for(let i=a;i<r.length;i++){let s=r[i].split(",").map(c=>c.trim());if(s.length>=5){let[c,m,p,E,C]=s;c&&m&&p&&E&&C&&n.push({date:c,isin:m.toUpperCase(),quantity:parseFloat(p),price:parseFloat(E),type:C.toUpperCase()})}else if(s.length>=4){let[c,m,p,E]=s;c&&m&&p&&E&&n.push({date:c,isin:m.toUpperCase(),quantity:parseFloat(p),price:parseFloat(E),type:"BUY"})}}return n}var f=`
+var $="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm",m=null,R=null,u=null;async function Y(){return m||(m=await import($),m)}async function h(){if(u)return;let t=await Y(),r=t.getJsDelivrBundles(),n=await t.selectBundle(r),e=URL.createObjectURL(new Blob([`importScripts("${n.mainWorker}");`],{type:"text/javascript"})),s=new Worker(e),a=new t.ConsoleLogger;R=new t.AsyncDuckDB(a,s),await R.instantiate(n.mainModule,n.pthreadWorker),u=await R.connect()}function O(){return u!==null}async function V(t){if(!u)throw new Error("DuckDB not initialized. Call initDuckDB() first.");await u.query(t)}async function A(t){if(!u)throw new Error("DuckDB not initialized. Call initDuckDB() first.");let r=await u.query(t);return W(r)}function f(){return{exec:V,query:A}}function W(t){let r=[],n=t.schema.fields,e=t.numRows;for(let s=0;s<e;s++){let a={};for(let i of n){let o=t.getChild(i.name);a[i.name]=z(o.get(s))}r.push(a)}return r}function z(t){if(t==null)return t;if(typeof t=="bigint")return Number(t);if(typeof t=="object"&&t!==null&&!(t instanceof Date)){let r=t;if(typeof r.toString=="function"){let n=r.toString();if(n!==""&&n!=="[object Object]"&&!isNaN(Number(n)))return Number(n)}}return typeof t=="string"&&t!==""&&!isNaN(Number(t))?Number(t):t}function g(t){let r=t.trim().split(`
+`),n=[],e=r[0].toLowerCase(),a=e.includes("date")||e.includes("isin")?1:0;for(let i=a;i<r.length;i++){let o=r[i].split(",").map(l=>l.trim());if(o.length>=5){let[l,S,_,p,L]=o;l&&S&&_&&p&&L&&n.push({date:l,isin:S.toUpperCase(),quantity:parseFloat(_),price:parseFloat(p),type:L.toUpperCase()})}else if(o.length>=4){let[l,S,_,p]=o;l&&S&&_&&p&&n.push({date:l,isin:S.toUpperCase(),quantity:parseFloat(_),price:parseFloat(p),type:"BUY"})}}return n}var d=`
     -- Layer 1a: Buy lots with cumulative quantity ranges per ISIN
     buy_lots AS (
         SELECT isin, date, price, quantity,
@@ -51,7 +51,7 @@ var F="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm",S=null,_=nu
             ) AS shares
         FROM buy_lots b
         LEFT JOIN sold_per_isin s ON b.isin = s.isin
-    )`,T="DROP TABLE IF EXISTS transactions",N=`
+    )`,B="DROP TABLE IF EXISTS transactions",N=`
     CREATE TABLE transactions (
         seq INTEGER,
         date DATE,
@@ -59,8 +59,8 @@ var F="https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm",S=null,_=nu
         quantity DOUBLE,
         price DOUBLE,
         type VARCHAR
-    )`;function k(e){return`
-WITH ${f},
+    )`;function w(t){return`
+WITH ${d},
 
 raw AS (
     SELECT
@@ -87,21 +87,21 @@ SELECT
     first_date::VARCHAR AS first_date,
     last_date::VARCHAR  AS last_date,
     holding_days,
-    ${e} - total_invested + total_proceeds AS cash_balance,
-    ${e} - total_invested + total_proceeds + cost_basis_remaining AS portfolio_value,
+    ${t} - total_invested + total_proceeds AS cash_balance,
+    ${t} - total_invested + total_proceeds + cost_basis_remaining AS portfolio_value,
     realized_pnl AS total_return,
-    CASE WHEN ${e} > 0
-        THEN realized_pnl * 100.0 / ${e}
+    CASE WHEN ${t} > 0
+        THEN realized_pnl * 100.0 / ${t}
         ELSE 0
     END AS total_return_pct,
     holding_days / 365.0 AS holding_years,
     CASE WHEN holding_days > 0
-        THEN (POWER((${e} + realized_pnl) * 1.0 / ${e},
+        THEN (POWER((${t} + realized_pnl) * 1.0 / ${t},
                      365.0 / holding_days) - 1) * 100
         ELSE 0
     END AS annualized_return_pct
-FROM raw`}function O(e){return`
-WITH ${f},
+FROM raw`}function M(t){return`
+WITH ${d},
 
 -- Cost basis consumed by sells (FIFO), grouped by sell date
 sell_cost_basis AS (
@@ -124,24 +124,24 @@ date_flows AS (
 
 SELECT
     date::VARCHAR AS date,
-    ${e} + SUM(sell_proceeds - buy_cost) OVER w AS cash,
+    ${t} + SUM(sell_proceeds - buy_cost) OVER w AS cash,
     SUM(buy_cost - cost_sold) OVER w AS holdings_cost,
-    ${e} + SUM(sell_proceeds - buy_cost) OVER w
+    ${t} + SUM(sell_proceeds - buy_cost) OVER w
            + SUM(buy_cost - cost_sold) OVER w AS portfolio_value,
-    CASE WHEN ${e} > 0
+    CASE WHEN ${t} > 0
         THEN (SUM(sell_proceeds - buy_cost) OVER w
-            + SUM(buy_cost - cost_sold) OVER w) * 100.0 / ${e}
+            + SUM(buy_cost - cost_sold) OVER w) * 100.0 / ${t}
         ELSE 0
     END AS return_pct
 FROM date_flows
 WINDOW w AS (ORDER BY date ROWS UNBOUNDED PRECEDING)
-ORDER BY date`}function I(){return`
-WITH ${f}
+ORDER BY date`}function k(){return`
+WITH ${d}
 SELECT isin, cost_basis AS cost_basis, shares
 FROM remaining_lots
 WHERE shares > 0
-ORDER BY isin, cost_basis`}function P(){return`
-WITH ${f}
+ORDER BY isin, cost_basis`}function I(){return`
+WITH ${d}
 SELECT
     sell_date::VARCHAR AS date,
     isin,
@@ -150,7 +150,59 @@ SELECT
     buy_price   AS cost_basis,
     matched_qty * (sell_price - buy_price) AS pnl
 FROM fifo_matches
-ORDER BY sell_date, isin, buy_price`}async function M(e,r){if(await e.exec(T),await e.exec(N),r.length===0)return;let n=1e3;for(let t=0;t<r.length;t+=n){let a=r.slice(t,t+n).map((i,s)=>`(${t+s}, '${i.date}', '${i.isin}', ${i.quantity}, ${i.price}, '${i.type}')`).join(", ");await e.exec(`INSERT INTO transactions VALUES ${a}`)}}async function x(e,r){let n=await e.query(k(r));if(n.length===0||n[0].first_date==null)return null;let t=n[0],o=await Q(e),a=await G(e);return{totalInvested:Number(t.total_invested),totalProceeds:Number(t.total_proceeds),realizedPnL:Number(t.realized_pnl),costBasisRemaining:Number(t.cost_basis_remaining),cashBalance:Number(t.cash_balance),portfolioValue:Number(t.portfolio_value),totalReturn:Number(t.total_return),totalReturnPct:Number(t.total_return_pct),numStocks:Number(t.num_stocks),holdingDays:Number(t.holding_days),holdingYears:Number(t.holding_years),annualizedReturnPct:Number(t.annualized_return_pct),firstDate:String(t.first_date),lastDate:String(t.last_date),holdings:o,sellDetails:a}}async function v(e,r){return(await e.query(O(r))).map(t=>({date:String(t.date),cash:Number(t.cash),holdingsCost:Number(t.holdings_cost),portfolioValue:Number(t.portfolio_value),returnPct:Number(t.return_pct)}))}async function Q(e){return(await e.query(I())).map(n=>({isin:String(n.isin),shares:Number(n.shares),costBasis:Number(n.cost_basis)}))}async function G(e){return(await e.query(P())).map(n=>({date:String(n.date),isin:String(n.isin),sharesSold:Number(n.shares_sold),salePrice:Number(n.sale_price),costBasis:Number(n.cost_basis),pnl:Number(n.pnl)}))}var H={dataPath:"data",benchmarks:{nifty50:"nifty50.parquet",bank_nifty:"bank_nifty.parquet",sensex:"sensex.parquet",nifty_midcap:"nifty_midcap.parquet",bse_500:"bse_500.parquet"}},D=null,A=null,l={csvInput:document.getElementById("csvInput"),benchmarkSelect:document.getElementById("benchmarkSelect"),initialCapital:document.getElementById("initialCapital"),loadingSection:document.getElementById("loadingSection"),loadingText:document.getElementById("loadingText"),errorSection:document.getElementById("errorSection"),errorMessage:document.getElementById("errorMessage"),retryBtn:document.getElementById("retryBtn")};async function h(){B("Initializing DuckDB...");try{await w(),d()}catch(e){d(),y("Failed to initialize DuckDB: "+(e instanceof Error?e.message:String(e)))}}function j(){l.csvInput.addEventListener("change",U),l.retryBtn.addEventListener("click",()=>{l.errorSection.style.display="none",h()}),l.benchmarkSelect.addEventListener("change",async()=>{A&&await q()})}async function U(e){let n=e.target.files?.[0];if(n){B("Parsing transactions...");try{let t=await n.text(),o=R(t);if(o.length===0)throw new Error("No valid transactions found in CSV");if(o.sort((a,i)=>new Date(a.date).getTime()-new Date(i.date).getTime()),!L())throw new Error("Database not initialized. Please refresh the page and try again.");A=o,await M(b(),o),await q(),d()}catch(t){d(),y("Error processing CSV: "+(t instanceof Error?t.message:String(t)))}}}async function q(){if(A){B("Analyzing portfolio...");try{let e=parseFloat(l.initialCapital.value)||1e5,r=b(),n=await x(r,e);if(!n){y("No portfolio data available for analysis"),d();return}let t=await v(r,e),o=await J(l.benchmarkSelect.value);X(n,t,o),d()}catch(e){d(),y("Analysis error: "+(e instanceof Error?e.message:String(e)))}}}async function J(e){let r=H.benchmarks[e];try{return(await g(`
+ORDER BY sell_date, isin, buy_price`}var Q=`
+    CREATE OR REPLACE TABLE dim_calendar AS
+    SELECT
+        d::DATE                           AS date,
+        EXTRACT(year    FROM d)::INTEGER  AS year,
+        EXTRACT(quarter FROM d)::INTEGER  AS quarter,
+        EXTRACT(month   FROM d)::INTEGER  AS month,
+        EXTRACT(week    FROM d)::INTEGER  AS week,
+        EXTRACT(dow     FROM d)::INTEGER  AS day_of_week,
+        STRFTIME(d, '%Y-%m')              AS year_month,
+        STRFTIME(d, '%Y-W') || LPAD(EXTRACT(week FROM d)::VARCHAR, 2, '0') AS year_week,
+        STRFTIME(d, '%Y-Q') || EXTRACT(quarter FROM d) AS year_quarter
+    FROM generate_series(
+        (SELECT MIN(date) FROM transactions),
+        (SELECT MAX(date) FROM transactions),
+        INTERVAL 1 DAY
+    ) AS t(d)`,X=`
+    CREATE OR REPLACE TABLE dim_stock AS
+    SELECT DISTINCT
+        isin,
+        NULL::VARCHAR AS name,
+        NULL::VARCHAR AS sector,
+        NULL::VARCHAR AS industry
+    FROM transactions`,J=`
+    CREATE OR REPLACE TABLE fact_trades AS
+    WITH ${d}
+    SELECT
+        ROW_NUMBER() OVER (ORDER BY sell_date, isin, buy_price) AS trade_id,
+        isin,
+        buy_date,
+        sell_date,
+        buy_price,
+        sell_price,
+        matched_qty                                AS quantity,
+        matched_qty * buy_price                    AS cost_basis,
+        matched_qty * sell_price                   AS proceeds,
+        matched_qty * (sell_price - buy_price)     AS pnl,
+        CASE WHEN buy_price > 0
+            THEN (sell_price - buy_price) / buy_price * 100
+            ELSE 0
+        END                                        AS return_pct,
+        DATEDIFF('day', buy_date, sell_date)       AS holding_days
+    FROM fifo_matches`,j=`
+    CREATE OR REPLACE TABLE fact_positions AS
+    WITH ${d}
+    SELECT
+        isin,
+        date       AS buy_date,
+        cost_basis,
+        shares     AS quantity,
+        shares * cost_basis AS value_at_cost
+    FROM remaining_lots
+    WHERE shares > 0`,F=[Q,X,J,j];async function P(t,r){if(await t.exec(B),await t.exec(N),r.length===0)return;let n=1e3;for(let e=0;e<r.length;e+=n){let a=r.slice(e,e+n).map((i,o)=>`(${e+o}, '${i.date}', '${i.isin}', ${i.quantity}, ${i.price}, '${i.type}')`).join(", ");await t.exec(`INSERT INTO transactions VALUES ${a}`)}await Z(t)}async function Z(t){for(let r of F)await t.exec(r)}async function U(t,r){let n=await t.query(w(r));if(n.length===0||n[0].first_date==null)return null;let e=n[0],s=await K(t),a=await tt(t);return{totalInvested:Number(e.total_invested),totalProceeds:Number(e.total_proceeds),realizedPnL:Number(e.realized_pnl),costBasisRemaining:Number(e.cost_basis_remaining),cashBalance:Number(e.cash_balance),portfolioValue:Number(e.portfolio_value),totalReturn:Number(e.total_return),totalReturnPct:Number(e.total_return_pct),numStocks:Number(e.num_stocks),holdingDays:Number(e.holding_days),holdingYears:Number(e.holding_years),annualizedReturnPct:Number(e.annualized_return_pct),firstDate:String(e.first_date),lastDate:String(e.last_date),holdings:s,sellDetails:a}}async function x(t,r){return(await t.query(M(r))).map(e=>({date:String(e.date),cash:Number(e.cash),holdingsCost:Number(e.holdings_cost),portfolioValue:Number(e.portfolio_value),returnPct:Number(e.return_pct)}))}async function K(t){return(await t.query(k())).map(n=>({isin:String(n.isin),shares:Number(n.shares),costBasis:Number(n.cost_basis)}))}async function tt(t){return(await t.query(I())).map(n=>({date:String(n.date),isin:String(n.isin),sharesSold:Number(n.shares_sold),salePrice:Number(n.sale_price),costBasis:Number(n.cost_basis),pnl:Number(n.pnl)}))}var q={dataPath:"data",benchmarks:{nifty50:"nifty50.parquet",bank_nifty:"bank_nifty.parquet",sensex:"sensex.parquet",nifty_midcap:"nifty_midcap.parquet",bse_500:"bse_500.parquet"}},b=null,T=null,c={csvInput:document.getElementById("csvInput"),benchmarkSelect:document.getElementById("benchmarkSelect"),initialCapital:document.getElementById("initialCapital"),loadingSection:document.getElementById("loadingSection"),loadingText:document.getElementById("loadingText"),errorSection:document.getElementById("errorSection"),errorMessage:document.getElementById("errorMessage"),retryBtn:document.getElementById("retryBtn")};async function C(){D("Initializing DuckDB...");try{await h(),E()}catch(t){E(),y("Failed to initialize DuckDB: "+(t instanceof Error?t.message:String(t)))}}function et(){c.csvInput.addEventListener("change",v),c.retryBtn.addEventListener("click",()=>{c.errorSection.style.display="none",C()}),c.benchmarkSelect.addEventListener("change",async()=>{T&&await H()})}async function v(t){let n=t.target.files?.[0];if(n){D("Parsing transactions...");try{let e=await n.text(),s=g(e);if(s.length===0)throw new Error("No valid transactions found in CSV");if(s.sort((a,i)=>new Date(a.date).getTime()-new Date(i.date).getTime()),!O())throw new Error("Database not initialized. Please refresh the page and try again.");T=s,await P(f(),s),await H(),E()}catch(e){E(),y("Error processing CSV: "+(e instanceof Error?e.message:String(e)))}}}async function H(){if(T){D("Analyzing portfolio...");try{let t=parseFloat(c.initialCapital.value)||1e5,r=f(),n=await U(r,t);if(!n){y("No portfolio data available for analysis"),E();return}let e=await x(r,t),s=await nt(c.benchmarkSelect.value);rt(n,e,s),E()}catch(t){E(),y("Analysis error: "+(t instanceof Error?t.message:String(t)))}}}async function nt(t){let r=q.benchmarks[t];try{return(await A(`
             SELECT
                 date,
                 close_price,
@@ -158,7 +210,7 @@ ORDER BY sell_date, isin, buy_price`}async function M(e,r){if(await e.exec(T),aw
                     NULLIF(LAG(close_price) OVER (ORDER BY date), 0) * 100 as daily_return_pct,
                 SUM((close_price - LAG(close_price) OVER (ORDER BY date)) /
                     NULLIF(LAG(close_price) OVER (ORDER BY date), 0)) OVER (ORDER BY date) * 100 as cumulative_return_pct
-            FROM parquet_scan('${H.dataPath}/${r}')
+            FROM parquet_scan('${q.dataPath}/${r}')
             WHERE date IS NOT NULL AND close_price IS NOT NULL
             ORDER BY date
-        `)).map(t=>({date:t.date,closePrice:Number(t.close_price)||0,cumulativeReturnPct:Number(t.cumulative_return_pct)||0}))}catch(n){return console.warn(`Could not load benchmark data for ${e}:`,n.message),[]}}function X(e,r,n){let t=s=>document.getElementById(s),o=t("totalReturn");o.textContent=`${e.totalReturn>=0?"+":""}${e.totalReturnPct.toFixed(2)}%`,o.className="stat-value "+(e.totalReturn>=0?"positive":"negative");let a=t("annualizedReturn");a.textContent=`${e.annualizedReturnPct>=0?"+":""}${e.annualizedReturnPct.toFixed(2)}%`,a.className="stat-value "+(e.annualizedReturnPct>=0?"positive":"negative"),t("portfolioValue").textContent=`\u20B9${e.portfolioValue.toLocaleString("en-IN")}`,t("holdingPeriod").textContent=`${e.holdingDays} days (${e.holdingYears.toFixed(1)} years)`;let i=t("pnlGrid");if(e.realizedPnL!==0){i.style.display="grid";let s=t("totalRealizedPnL");s.textContent=`${e.realizedPnL>=0?"+":""}\u20B9${e.realizedPnL.toLocaleString("en-IN")}`,s.className="stat-value "+(e.realizedPnL>=0?"positive":"negative"),t("totalUnrealizedGain").textContent="-",t("fifoCostBasis").textContent=`\u20B9${e.costBasisRemaining.toLocaleString("en-IN")}`,t("stocksCount").textContent=`${e.numStocks}`}else i.style.display="none";K(r,n)}function K(e,r){let n=document.getElementById("returnsChart").getContext("2d"),t=e.map(i=>i.date),o=e.map(i=>i.returnPct),a;if(r.length>0){let i=new Set(e.map(s=>String(s.date)));a=r.filter(s=>i.has(String(s.date))).map(s=>s.cumulativeReturnPct)}else a=e.map(()=>0);D&&D.destroy(),D=new Chart(n,{type:"line",data:{labels:t.slice(0,100),datasets:[{label:"Portfolio",data:o.slice(0,100),borderColor:"#4facfe",backgroundColor:"rgba(79, 172, 254, 0.1)",borderWidth:2,pointRadius:2,fill:!0,tension:.1},{label:"Benchmark ("+l.benchmarkSelect.options[l.benchmarkSelect.selectedIndex].text+")",data:a.slice(0,100),borderColor:"#4caf50",borderWidth:2,pointRadius:2,fill:!1,tension:.1}]},options:{responsive:!0,maintainAspectRatio:!1,interaction:{mode:"index",intersect:!1},plugins:{legend:{position:"top",labels:{color:"#e0e0e0",font:{size:12}}},tooltip:{backgroundColor:"rgba(0,0,0,0.8)",titleColor:"#fff",bodyColor:"#e0e0e0",borderColor:"rgba(255,255,255,0.1)",borderWidth:1,callbacks:{label:i=>i.dataset.label+": "+i.parsed.y.toFixed(2)+"%"}},title:{display:!0,text:"Cumulative Returns Comparison",color:"#fff",font:{size:14}}},scales:{x:{grid:{color:"rgba(255,255,255,0.05)"},ticks:{color:"#888",maxTicksLimit:10}},y:{grid:{color:"rgba(255,255,255,0.05)"},ticks:{color:"#888",callback:i=>i+"%"},border:{color:"rgba(255,255,255,0.1)"}}}}})}function B(e){l.loadingText.textContent=e,l.loadingSection.style.display="flex"}function d(){l.loadingSection.style.display="none"}function y(e){l.loadingSection.style.display="none",l.errorMessage.textContent=e,l.errorSection.style.display="block",l.errorSection.style.visibility="visible",l.errorSection.style.opacity="1"}document.addEventListener("DOMContentLoaded",()=>{j(),h()});window.PortfolioAnalysis={init:h,parseCSV:R,handleFileUpload:U};
+        `)).map(e=>({date:e.date,closePrice:Number(e.close_price)||0,cumulativeReturnPct:Number(e.cumulative_return_pct)||0}))}catch(n){return console.warn(`Could not load benchmark data for ${t}:`,n.message),[]}}function rt(t,r,n){let e=o=>document.getElementById(o),s=e("totalReturn");s.textContent=`${t.totalReturn>=0?"+":""}${t.totalReturnPct.toFixed(2)}%`,s.className="stat-value "+(t.totalReturn>=0?"positive":"negative");let a=e("annualizedReturn");a.textContent=`${t.annualizedReturnPct>=0?"+":""}${t.annualizedReturnPct.toFixed(2)}%`,a.className="stat-value "+(t.annualizedReturnPct>=0?"positive":"negative"),e("portfolioValue").textContent=`\u20B9${t.portfolioValue.toLocaleString("en-IN")}`,e("holdingPeriod").textContent=`${t.holdingDays} days (${t.holdingYears.toFixed(1)} years)`;let i=e("pnlGrid");if(t.realizedPnL!==0){i.style.display="grid";let o=e("totalRealizedPnL");o.textContent=`${t.realizedPnL>=0?"+":""}\u20B9${t.realizedPnL.toLocaleString("en-IN")}`,o.className="stat-value "+(t.realizedPnL>=0?"positive":"negative"),e("totalUnrealizedGain").textContent="-",e("fifoCostBasis").textContent=`\u20B9${t.costBasisRemaining.toLocaleString("en-IN")}`,e("stocksCount").textContent=`${t.numStocks}`}else i.style.display="none";it(r,n)}function it(t,r){let n=document.getElementById("returnsChart").getContext("2d"),e=t.map(i=>i.date),s=t.map(i=>i.returnPct),a;if(r.length>0){let i=new Set(t.map(o=>String(o.date)));a=r.filter(o=>i.has(String(o.date))).map(o=>o.cumulativeReturnPct)}else a=t.map(()=>0);b&&b.destroy(),b=new Chart(n,{type:"line",data:{labels:e.slice(0,100),datasets:[{label:"Portfolio",data:s.slice(0,100),borderColor:"#4facfe",backgroundColor:"rgba(79, 172, 254, 0.1)",borderWidth:2,pointRadius:2,fill:!0,tension:.1},{label:"Benchmark ("+c.benchmarkSelect.options[c.benchmarkSelect.selectedIndex].text+")",data:a.slice(0,100),borderColor:"#4caf50",borderWidth:2,pointRadius:2,fill:!1,tension:.1}]},options:{responsive:!0,maintainAspectRatio:!1,interaction:{mode:"index",intersect:!1},plugins:{legend:{position:"top",labels:{color:"#e0e0e0",font:{size:12}}},tooltip:{backgroundColor:"rgba(0,0,0,0.8)",titleColor:"#fff",bodyColor:"#e0e0e0",borderColor:"rgba(255,255,255,0.1)",borderWidth:1,callbacks:{label:i=>i.dataset.label+": "+i.parsed.y.toFixed(2)+"%"}},title:{display:!0,text:"Cumulative Returns Comparison",color:"#fff",font:{size:14}}},scales:{x:{grid:{color:"rgba(255,255,255,0.05)"},ticks:{color:"#888",maxTicksLimit:10}},y:{grid:{color:"rgba(255,255,255,0.05)"},ticks:{color:"#888",callback:i=>i+"%"},border:{color:"rgba(255,255,255,0.1)"}}}}})}function D(t){c.loadingText.textContent=t,c.loadingSection.style.display="flex"}function E(){c.loadingSection.style.display="none"}function y(t){c.loadingSection.style.display="none",c.errorMessage.textContent=t,c.errorSection.style.display="block",c.errorSection.style.visibility="visible",c.errorSection.style.opacity="1"}document.addEventListener("DOMContentLoaded",()=>{et(),C()});window.PortfolioAnalysis={init:C,parseCSV:g,handleFileUpload:v};

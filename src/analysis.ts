@@ -1,5 +1,6 @@
 import type { Transaction, PortfolioStats, TimeSeriesPoint, Holding, SellDetail, DB } from './types.ts';
 import * as SQL from './sql.ts';
+import { MATERIALIZE_ALL } from './cube.ts';
 
 export async function loadTransactions(db: DB, transactions: Transaction[]): Promise<void> {
     await db.exec(SQL.DROP_TABLE);
@@ -14,6 +15,15 @@ export async function loadTransactions(db: DB, transactions: Transaction[]): Pro
             `(${i + j}, '${t.date}', '${t.isin}', ${t.quantity}, ${t.price}, '${t.type}')`
         ).join(', ');
         await db.exec(`INSERT INTO transactions VALUES ${values}`);
+    }
+
+    // Materialize OLAP cube (dimensions + fact tables)
+    await materializeCube(db);
+}
+
+export async function materializeCube(db: DB): Promise<void> {
+    for (const sql of MATERIALIZE_ALL) {
+        await db.exec(sql);
     }
 }
 

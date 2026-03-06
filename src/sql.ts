@@ -15,7 +15,7 @@
 
 // ── Shared CTE chain (reused by all analysis queries) ──────
 
-const FIFO_CTES = `
+export const FIFO_CTES = `
     -- Layer 1a: Buy lots with cumulative quantity ranges per ISIN
     buy_lots AS (
         SELECT isin, date, price, quantity,
