@@ -1,4 +1,4 @@
-import { initDuckDB, runQuery, isReady, asDB } from './duckdb-module.ts';
+import { initDuckDB, runQuery, isReady, asDB, registerParquet } from './duckdb-module.ts';
 import { parseCSV } from './portfolio.ts';
 import { loadTransactions, getStats, getTimeSeries } from './analysis.ts';
 import { generateInsights, hasDefaultKey } from './insights.ts';
@@ -96,6 +96,14 @@ async function handleFileUpload(event: Event): Promise<void> {
         await loadTransactions(asDB(), transactions);
         await runAnalysis();
         hideLoading();
+
+        // Generate insights only on new file upload
+        if (hasDefaultKey()) {
+            runInsights();
+        } else {
+            const details = document.querySelector('.insights-upgrade') as HTMLDetailsElement;
+            if (details) details.open = true;
+        }
     } catch (error) {
         hideLoading();
         showError('Error processing CSV: ' + (error instanceof Error ? error.message : String(error)));
@@ -120,14 +128,6 @@ async function runAnalysis(): Promise<void> {
         elements.uploadSection.style.display = 'none';
         elements.insightsSection.style.display = 'block';
         hideLoading();
-
-        if (hasDefaultKey()) {
-            runInsights();
-        } else {
-            // No default key — open the API key input
-            const details = document.querySelector('.insights-upgrade') as HTMLDetailsElement;
-            if (details) details.open = true;
-        }
     } catch (error) {
         hideLoading();
         showError('Analysis error: ' + (error instanceof Error ? error.message : String(error)));
@@ -137,23 +137,36 @@ async function runAnalysis(): Promise<void> {
 async function calculateBenchmarkReturns(benchmarkKey: string): Promise<BenchmarkReturn[]> {
     const parquetFile = CONFIG.benchmarks[benchmarkKey];
     try {
+        await registerParquet(parquetFile, `${CONFIG.dataPath}/${parquetFile}`);
         const rows = await runQuery(`
-            SELECT
-                date,
-                close_price,
-                (close_price - LAG(close_price) OVER (ORDER BY date)) /
-                    NULLIF(LAG(close_price) OVER (ORDER BY date), 0) * 100 as daily_return_pct,
-                SUM((close_price - LAG(close_price) OVER (ORDER BY date)) /
-                    NULLIF(LAG(close_price) OVER (ORDER BY date), 0)) OVER (ORDER BY date) * 100 as cumulative_return_pct
-            FROM parquet_scan('${CONFIG.dataPath}/${parquetFile}')
-            WHERE date IS NOT NULL AND close_price IS NOT NULL
+            WITH daily AS (
+                SELECT date, close,
+                    (close - LAG(close) OVER (ORDER BY date)) /
+                        NULLIF(LAG(close) OVER (ORDER BY date), 0) * 100 as daily_return_pct
+                FROM parquet_scan('${parquetFile}')
+                WHERE date IS NOT NULL AND close IS NOT NULL
+            )
+            SELECT date, close, daily_return_pct,
+                SUM(daily_return_pct) OVER (ORDER BY date) as cumulative_return_pct
+            FROM daily
             ORDER BY date
         `);
-        return rows.map(r => ({
-            date: r.date as string | Date,
-            closePrice: Number(r.close_price) || 0,
-            cumulativeReturnPct: Number(r.cumulative_return_pct) || 0
-        }));
+        return rows.map(r => {
+            const d = r.date;
+            let dateStr: string;
+            if (typeof d === 'number') {
+                dateStr = new Date(d).toISOString().slice(0, 10);
+            } else if (d instanceof Date) {
+                dateStr = d.toISOString().slice(0, 10);
+            } else {
+                dateStr = String(d).slice(0, 10);
+            }
+            return {
+                date: dateStr,
+                closePrice: Number(r.close) || 0,
+                cumulativeReturnPct: Number(r.cumulative_return_pct) || 0
+            };
+        });
     } catch (error) {
         console.warn(`Could not load benchmark data for ${benchmarkKey}:`, (error as Error).message);
         return [];
@@ -192,15 +205,21 @@ function renderResults(stats: PortfolioStats, timeSeries: TimeSeriesPoint[], ben
 
 function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkReturn[]): void {
     const ctx = (document.getElementById('returnsChart') as HTMLCanvasElement).getContext('2d')!;
-    const labels = timeSeries.map(r => r.date);
-    const portfolioData = timeSeries.map(r => r.returnPct);
 
-    let benchmarkData: number[];
-    if (benchmarkReturns.length > 0) {
-        const dates = new Set(timeSeries.map(r => String(r.date)));
-        benchmarkData = benchmarkReturns.filter(r => dates.has(String(r.date))).map(r => r.cumulativeReturnPct);
-    } else {
-        benchmarkData = timeSeries.map(() => 0);
+    // Build portfolio {x: Date, y: returnPct} points
+    const portfolioPoints = timeSeries.map(r => ({
+        x: new Date(String(r.date)).getTime(),
+        y: r.returnPct
+    }));
+
+    // Build benchmark {x: Date, y: cumulativeReturnPct} points within portfolio date range
+    let benchmarkPoints: { x: number; y: number }[] = [];
+    if (benchmarkReturns.length > 0 && portfolioPoints.length > 0) {
+        const firstTime = portfolioPoints[0].x;
+        const lastTime = portfolioPoints[portfolioPoints.length - 1].x;
+        benchmarkPoints = benchmarkReturns
+            .map(r => ({ x: new Date(String(r.date)).getTime(), y: r.cumulativeReturnPct }))
+            .filter(p => p.x >= firstTime && p.x <= lastTime);
     }
 
     if (chart) chart.destroy();
@@ -208,44 +227,49 @@ function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkR
     chart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: labels.slice(0, 100),
             datasets: [
                 {
                     label: 'Portfolio',
-                    data: portfolioData.slice(0, 100),
-                    borderColor: '#4facfe',
-                    backgroundColor: 'rgba(79, 172, 254, 0.1)',
-                    borderWidth: 2, pointRadius: 2, fill: true, tension: 0.1
+                    data: portfolioPoints,
+                    borderColor: '#5367ff',
+                    backgroundColor: 'rgba(83, 103, 255, 0.08)',
+                    borderWidth: 2, pointRadius: 0, fill: true, tension: 0.1,
+                    stepped: 'before' as unknown as boolean
                 },
                 {
                     label: 'Benchmark (' + elements.benchmarkSelect.options[elements.benchmarkSelect.selectedIndex].text + ')',
-                    data: benchmarkData.slice(0, 100),
-                    borderColor: '#4caf50',
-                    borderWidth: 2, pointRadius: 2, fill: false, tension: 0.1
+                    data: benchmarkPoints,
+                    borderColor: '#00d09c',
+                    borderWidth: 2, pointRadius: 0, fill: false, tension: 0.1
                 }
             ]
         },
         options: {
             responsive: true, maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
+            interaction: { mode: 'nearest', intersect: false, axis: 'x' },
             plugins: {
-                legend: { position: 'top', labels: { color: '#e0e0e0', font: { size: 12 } } },
+                legend: { position: 'top', labels: { color: '#44475b', font: { size: 12 } } },
                 tooltip: {
-                    backgroundColor: 'rgba(0,0,0,0.8)', titleColor: '#fff', bodyColor: '#e0e0e0',
-                    borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1,
+                    backgroundColor: '#fff', titleColor: '#44475b', bodyColor: '#7c7e8c',
+                    borderColor: '#e8e8eb', borderWidth: 1,
                     callbacks: {
                         label: (ctx: { dataset: { label: string }; parsed: { y: number } }) =>
                             ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%'
                     }
                 },
-                title: { display: true, text: 'Cumulative Returns Comparison', color: '#fff', font: { size: 14 } }
+                title: { display: true, text: 'Cumulative Returns Comparison', color: '#44475b', font: { size: 14 } }
             },
             scales: {
-                x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888', maxTicksLimit: 10 } },
+                x: {
+                    type: 'time',
+                    time: { unit: 'month', displayFormats: { month: 'MMM yyyy' } },
+                    grid: { color: '#f0f0f3' },
+                    ticks: { color: '#9b9dab', maxTicksLimit: 10 }
+                },
                 y: {
-                    grid: { color: 'rgba(255,255,255,0.05)' },
-                    ticks: { color: '#888', callback: (v: number) => v + '%' },
-                    border: { color: 'rgba(255,255,255,0.1)' }
+                    grid: { color: '#f0f0f3' },
+                    ticks: { color: '#9b9dab', callback: (v: number) => v + '%' },
+                    border: { color: '#e8e8eb' }
                 }
             }
         }

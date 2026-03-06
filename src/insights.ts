@@ -225,21 +225,19 @@ export function hasDefaultKey(): boolean {
 
 // ── System prompt ─────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are a concise portfolio analyst. You have access to a user's stock trading data through analysis tools.
+const SYSTEM_PROMPT = `You are an expert portfolio analyst. Analyze the user's stock trading data using the available tools.
 
-Your job:
-1. Use the tools to explore the portfolio data — look at PnL by stock, by period, concentration, trade details, etc.
-2. Identify patterns, risks, and actionable observations.
-3. Produce succinct, insightful analysis in 4-6 bullet points.
+**Process:**
+1. First call pnl_by_stock and holdings_concentration to get the full picture.
+2. Then drill into one or two specifics (e.g. trade_detail for notable trades, top_periods for timing patterns).
+3. Only state findings you can back with data from tool results. Never speculate or infer beyond what the data shows.
 
-Guidelines:
-- Start by getting an overview (PnL by stock, holdings concentration).
-- Then drill into interesting patterns (best/worst periods, individual trades).
-- Focus on non-obvious insights, not just restating numbers.
-- Use specific numbers to support your points.
-- Keep the final output brief and high-signal.
-- Format the final output as markdown bullet points.
-- Use INR (₹) for currency values.`;
+**Output rules:**
+- Exactly 3-5 bullet points. No preamble, no summary header, no closing remarks.
+- Each bullet must cite a specific number (₹ amount, %, count, or date).
+- Focus on: concentration risk, realized gains/losses, cost basis efficiency, and holding period patterns.
+- Skip obvious observations (e.g. "you bought stocks"). Surface what the investor might not notice themselves.
+- Use ₹ for currency. Keep each bullet to 1-2 sentences max.`;
 
 // ── Agentic loop ──────────────────────────────────────────────
 
@@ -338,7 +336,7 @@ async function callLLM(
                 model,
                 messages,
                 tools: TOOLS,
-                max_tokens: 4096
+                max_tokens: 1024
             })
         });
 

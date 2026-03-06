@@ -275,3 +275,70 @@ test.describe('Benchmark selector', () => {
         expect(jsErrors).toHaveLength(0);
     });
 });
+
+test.describe('Benchmark time series data', () => {
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        await page.waitForLoadState('networkidle');
+        await page.locator('#csvInput').setInputFiles({
+            name: 'transactions.csv',
+            mimeType: 'text/csv',
+            buffer: Buffer.from(SAMPLE_CSV),
+        });
+        await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
+    });
+
+    test('benchmark dataset has non-zero values', async ({ page }) => {
+        const result = await page.evaluate(() => {
+            const canvas = document.getElementById('returnsChart');
+            const chart = Chart.getChart(canvas);
+            if (!chart) return null;
+            const data = chart.data.datasets[1]?.data ?? [];
+            // Data points are {x, y} objects
+            const values = data.map(p => typeof p === 'object' && p !== null ? p.y : p);
+            return values;
+        });
+
+        expect(result, 'Benchmark dataset should exist').not.toBeNull();
+        expect(result.length, 'Benchmark dataset should have data points').toBeGreaterThan(0);
+
+        const nonZero = result.filter(v => v !== 0 && v !== null);
+        expect(nonZero.length, 'Benchmark should have non-zero return values').toBeGreaterThan(0);
+    });
+
+    test('benchmark values are realistic percentages', async ({ page }) => {
+        const result = await page.evaluate(() => {
+            const canvas = document.getElementById('returnsChart');
+            const chart = Chart.getChart(canvas);
+            if (!chart) return null;
+            const data = chart.data.datasets[1]?.data ?? [];
+            return data.map(p => typeof p === 'object' && p !== null ? p.y : p);
+        });
+
+        expect(result).not.toBeNull();
+        const values = result.filter(v => v !== null && v !== undefined);
+        expect(values.length).toBeGreaterThan(0);
+
+        for (const v of values) {
+            expect(v, `Benchmark return ${v}% is unrealistic`).toBeGreaterThan(-50);
+            expect(v, `Benchmark return ${v}% is unrealistic`).toBeLessThan(100);
+        }
+    });
+
+    test('benchmark has variance (not flat)', async ({ page }) => {
+        const result = await page.evaluate(() => {
+            const canvas = document.getElementById('returnsChart');
+            const chart = Chart.getChart(canvas);
+            if (!chart) return null;
+            const data = chart.data.datasets[1]?.data ?? [];
+            return data.map(p => typeof p === 'object' && p !== null ? p.y : p);
+        });
+
+        expect(result).not.toBeNull();
+        const values = result.filter(v => v !== null && v !== undefined);
+        expect(values.length).toBeGreaterThanOrEqual(2);
+
+        const uniqueValues = new Set(values);
+        expect(uniqueValues.size, 'Benchmark data should not be flat (all same value)').toBeGreaterThan(1);
+    });
+});

@@ -88,6 +88,15 @@ export function getDB(): DuckDBInstance {
     return db;
 }
 
+export async function registerParquet(name: string, url: string): Promise<void> {
+    if (!db) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    await (db as unknown as { registerFileBuffer(name: string, buffer: Uint8Array): Promise<void> })
+        .registerFileBuffer(name, new Uint8Array(buffer));
+}
+
 export async function closeDuckDB(): Promise<void> {
     if (conn) { await conn.close(); conn = null; }
     if (db) { await db.terminate(); db = null; }
