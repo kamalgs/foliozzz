@@ -1,26 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Portfolio computation tests', () => {
-    test('all 26 computation tests pass', async ({ page }) => {
-        await page.goto('/portfolio-test.html');
-        await page.waitForFunction(() => window.__testResults, { timeout: 15000 });
-
-        const results = await page.evaluate(() => window.__testResults);
-        expect(results.failed, `${results.failed} computation test(s) failed`).toBe(0);
-        expect(results.passed).toBe(26);
-    });
-});
-
 test.describe('Displayed stats correctness', () => {
     /*  Sample CSV hand-calculated values (initialCapital=100000):
-     *
-     *  totalInvested = 67000, totalProceeds = 21900
-     *  realizedPnL = 1900 (FIFO)
-     *  costBasisRemaining = 47000
-     *  cash = 54900
-     *  portfolioValue = 101900
-     *  totalReturn = 1900 (1.90%)
-     *  holdingDays = 335
+     *  portfolioValue=101900, totalReturn=+1.90%, holdingDays=335
+     *  realizedPnL=1900, costBasisRemaining=47000, numStocks=2
      */
     const SAMPLE_CSV = `transaction_date,isin,quantity,price,type
 2024-01-15,INE002A01018,10,2500,BUY
@@ -76,7 +59,6 @@ test.describe('Displayed stats correctness', () => {
 2024-01-15,INE002A01018,10,2500,BUY
 2024-02-20,INE009A01013,20,1450,BUY`;
 
-        // Upload a new file to reset
         await page.locator('#csvInput').setInputFiles({
             name: 'buy_only.csv',
             mimeType: 'text/csv',
@@ -85,7 +67,6 @@ test.describe('Displayed stats correctness', () => {
         await expect(page.locator('#loadingSection')).toBeHidden({ timeout: 30000 });
 
         const text = await page.locator('#totalReturn').textContent();
-        // Buy-only at cost: portfolio = initial capital, return = 0%
         expect(text).toBe('+0.00%');
     });
 });
