@@ -1,0 +1,12 @@
+node_modules/
+test-results/
+playwright-report/
+tests/
+src/
+.git/
+.gitignore
+.dockerignore
+tsconfig.json
+package.json
+package-lock.json
+*.nomad.hcl

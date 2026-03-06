@@ -204,9 +204,8 @@ async function executeTool(db: DB, name: string, args: Record<string, unknown>):
 
 // ── Configuration ─────────────────────────────────────────────
 
-// Default key for free-tier insights (rate-limited, free models only)
-// Replace with your own OpenRouter key before deploying
-const DEFAULT_API_KEY = 'OPENROUTER_DEFAULT_KEY';
+// Injected at deploy time by entrypoint.sh from OPENROUTER_API_KEY env var
+const DEFAULT_API_KEY = '__OPENROUTER_API_KEY__';
 
 const FREE_MODEL = 'openrouter/free';
 const PREMIUM_MODEL = 'anthropic/claude-sonnet-4';
@@ -218,7 +217,7 @@ export interface InsightsConfig {
 
 export function getDefaultKey(): string { return DEFAULT_API_KEY; }
 export function hasDefaultKey(): boolean {
-    return DEFAULT_API_KEY.length > 0 && !DEFAULT_API_KEY.startsWith('OPENROUTER_');
+    return DEFAULT_API_KEY.length > 0 && !DEFAULT_API_KEY.startsWith('__OPENROUTER_');
 }
 
 // ── System prompt ─────────────────────────────────────────────
@@ -251,7 +250,7 @@ export async function generateInsights(
     const apiKey = config.apiKey || DEFAULT_API_KEY;
     const model = config.model || (config.apiKey ? PREMIUM_MODEL : FREE_MODEL);
 
-    if (!apiKey || apiKey.startsWith('OPENROUTER_')) {
+    if (!apiKey || apiKey.startsWith('__OPENROUTER_')) {
         throw new Error('No API key configured. Please enter your OpenRouter API key.');
     }
 
