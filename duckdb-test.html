@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DuckDB Module Test</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #1a1a2e; color: #e0e0e0; }
+        .pass { color: #4caf50; }
+        .fail { color: #f44336; }
+        .info { color: #90caf9; }
+        #log { white-space: pre-wrap; line-height: 1.6; }
+        h1 { color: #fff; }
+        #summary { margin-top: 20px; padding: 10px; border: 1px solid #444; }
+    </style>
+</head>
+<body>
+    <script>
+        // The +esm CDN auto-conversion produces a benign "module is not defined" warning
+        // from CJS environment detection. Suppress it at the window level.
+        window.addEventListener('error', (event) => {
+            if (event.error?.message?.includes('module is not defined')) {
+                event.preventDefault();
+                return true;
+            }
+        }, true);
+    </script>
+    <h1>DuckDB WASM Module Tests</h1>
+    <div id="log"></div>
+    <div id="summary"></div>
+
+    <script type="module">
+        import { initDuckDB, runQuery, runSQL, isReady, closeDuckDB } from './duckdb-module.js';
+
+        const logEl = document.getElementById('log');
+        const summaryEl = document.getElementById('summary');
+        let passed = 0, failed = 0;
+
+        function log(msg, cls = '') {
+            const line = document.createElement('div');
+            line.textContent = msg;
+            if (cls) line.className = cls;
+            logEl.appendChild(line);
+        }
+
+        async function runTest(name, fn) {
+            try {
+                await fn();
+                passed++;
+                log(`PASS: ${name}`, 'pass');
+            } catch (err) {
+                failed++;
+                log(`FAIL: ${name} - ${err.message}`, 'fail');
+                console.error(`Test "${name}" failed:`, err);
+            }
+        }
+
+        function assert(condition, msg) {
+            if (!condition) throw new Error(msg || 'Assertion failed');
+        }
+
+        function assertEqual(actual, expected, msg) {
+            if (actual !== expected) {
+                throw new Error(msg || `Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+            }
+        }
+
+        async function runAllTests() {
+            log('--- Initializing DuckDB WASM ---', 'info');
+            const t0 = performance.now();
+
+            await runTest('initDuckDB succeeds', async () => {
+                await initDuckDB();
+            });
+
+            const initTime = (performance.now() - t0).toFixed(0);
+            log(`   (init took ${initTime}ms)`, 'info');
+
+            await runTest('isReady returns true after init', async () => {
+                assert(isReady() === true, 'isReady() should be true');
+            });
+
+            await runTest('simple SELECT query', async () => {
+                const rows = await runQuery('SELECT 42 as answer');
+                assertEqual(rows.length, 1, 'Should return 1 row');
+                assertEqual(rows[0].answer, 42, 'answer should be 42');
+            });
+
+            await runTest('multiple rows', async () => {
+                const rows = await runQuery("SELECT * FROM (VALUES (1,'a'), (2,'b'), (3,'c')) AS t(id, letter)");
+                assertEqual(rows.length, 3, 'Should return 3 rows');
+                assertEqual(rows[0].id, 1);
+                assertEqual(rows[2].letter, 'c');
+            });
+
+            await runTest('CREATE TABLE + INSERT + SELECT', async () => {
+                await runSQL('DROP TABLE IF EXISTS test_t');
+                await runSQL('CREATE TABLE test_t (id INTEGER, name VARCHAR)');
+                await runSQL("INSERT INTO test_t VALUES (1, 'Alice'), (2, 'Bob')");
+                const rows = await runQuery('SELECT * FROM test_t ORDER BY id');
+                assertEqual(rows.length, 2);
+                assertEqual(rows[0].name, 'Alice');
+                assertEqual(rows[1].name, 'Bob');
+            });
+
+            await runTest('aggregate query', async () => {
+                const rows = await runQuery('SELECT COUNT(*) as cnt, SUM(id) as total FROM test_t');
+                assertEqual(rows.length, 1);
+                assertEqual(rows[0].cnt, 2);
+                assertEqual(rows[0].total, 3);
+            });
+
+            await runTest('date handling', async () => {
+                await runSQL("DROP TABLE IF EXISTS date_test");
+                await runSQL("CREATE TABLE date_test (d DATE, v DOUBLE)");
+                await runSQL("INSERT INTO date_test VALUES ('2024-01-15', 100.5), ('2024-02-20', 200.3)");
+                const rows = await runQuery('SELECT d, v FROM date_test ORDER BY d');
+                assertEqual(rows.length, 2);
+                assert(rows[0].v === 100.5, 'First value should be 100.5');
+            });
+
+            await runTest('window functions (LAG, SUM OVER)', async () => {
+                const rows = await runQuery(`
+                    SELECT
+                        d,
+                        v,
+                        LAG(v) OVER (ORDER BY d) as prev_v,
+                        SUM(v) OVER (ORDER BY d) as running_sum
+                    FROM date_test
+                    ORDER BY d
+                `);
+                assertEqual(rows.length, 2);
+                assertEqual(rows[0].prev_v, null, 'First LAG should be null');
+                assert(rows[1].running_sum === 300.8, 'Running sum should be 300.8');
+            });
+
+            await runTest('CSV-like transaction workflow', async () => {
+                await runSQL('DROP TABLE IF EXISTS transactions');
+                await runSQL(`
+                    CREATE TABLE transactions (
+                        date DATE,
+                        isin VARCHAR,
+                        quantity DOUBLE,
+                        price DOUBLE,
+                        type VARCHAR
+                    )
+                `);
+                await runSQL(`
+                    INSERT INTO transactions VALUES
+                        ('2024-01-15', 'INE002A01018', 10, 2500, 'BUY'),
+                        ('2024-02-20', 'INE002A01018', 5, 2600, 'BUY'),
+                        ('2024-03-10', 'INE009A01013', 20, 1450, 'BUY'),
+                        ('2024-09-15', 'INE002A01018', 5, 2700, 'SELL'),
+                        ('2024-12-15', 'INE002A01018', 3, 2800, 'SELL')
+                `);
+
+                const rows = await runQuery('SELECT COUNT(*) as cnt FROM transactions');
+                assertEqual(Number(rows[0].cnt), 5, 'Should have 5 transactions');
+
+                const isins = await runQuery('SELECT DISTINCT isin FROM transactions ORDER BY isin');
+                assertEqual(isins.length, 2, 'Should have 2 distinct ISINs');
+
+                // FIFO lot tracking
+                const buys = await runQuery(`
+                    SELECT
+                        ROW_NUMBER() OVER (ORDER BY date, isin) as lot_id,
+                        date as purchase_date,
+                        isin,
+                        quantity as shares,
+                        price as cost_basis
+                    FROM transactions
+                    WHERE type = 'BUY'
+                    ORDER BY date, isin
+                `);
+                assertEqual(buys.length, 3, 'Should have 3 buy lots');
+
+                const sells = await runQuery("SELECT * FROM transactions WHERE type = 'SELL' ORDER BY date");
+                assertEqual(sells.length, 2, 'Should have 2 sell transactions');
+            });
+
+            await runTest('portfolio stats query', async () => {
+                const stats = await runQuery(`
+                    SELECT
+                        SUM(CASE WHEN type = 'BUY' THEN quantity * price ELSE 0 END) as total_invested,
+                        SUM(CASE WHEN type = 'SELL' THEN quantity * price ELSE 0 END) as total_sold,
+                        SUM(CASE WHEN type = 'BUY' THEN quantity ELSE -quantity END) as net_shares,
+                        COUNT(DISTINCT isin) as num_stocks,
+                        MIN(date) as first_date,
+                        MAX(date) as last_date
+                    FROM transactions
+                `);
+                assertEqual(stats.length, 1);
+                assert(Number(stats[0].total_invested) > 0, 'total_invested should be > 0');
+                assert(Number(stats[0].total_sold) > 0, 'total_sold should be > 0');
+                assert(Number(stats[0].num_stocks) === 2, 'num_stocks should be 2');
+            });
+
+            await runTest('empty result set', async () => {
+                const rows = await runQuery("SELECT * FROM transactions WHERE type = 'DIVIDEND'");
+                assertEqual(rows.length, 0, 'Should return empty array');
+            });
+
+            await runTest('error on bad SQL throws', async () => {
+                let threw = false;
+                try {
+                    await runQuery('SELECT * FROM nonexistent_table_xyz');
+                } catch (e) {
+                    threw = true;
+                }
+                assert(threw, 'Should throw on bad SQL');
+            });
+
+            await runTest('duplicate initDuckDB is safe', async () => {
+                await initDuckDB(); // should be a no-op
+                const rows = await runQuery('SELECT 1 as x');
+                assertEqual(rows[0].x, 1);
+            });
+
+            // Cleanup
+            await runSQL('DROP TABLE IF EXISTS test_t');
+            await runSQL('DROP TABLE IF EXISTS date_test');
+            await runSQL('DROP TABLE IF EXISTS transactions');
+
+            // Summary
+            const total = passed + failed;
+            const summary = `\n--- Results: ${passed}/${total} passed, ${failed} failed ---`;
+            log(summary, failed > 0 ? 'fail' : 'pass');
+            summaryEl.textContent = summary;
+            summaryEl.className = failed > 0 ? 'fail' : 'pass';
+
+            // Set test results on window for Playwright to read
+            window.__testResults = { passed, failed, total };
+        }
+
+        runAllTests().catch(err => {
+            log(`FATAL: ${err.message}`, 'fail');
+            console.error(err);
+            window.__testResults = { passed, failed: failed + 1, total: passed + failed + 1 };
+        });
+    </script>
+</body>
+</html>

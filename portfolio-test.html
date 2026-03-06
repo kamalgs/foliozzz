@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Portfolio Computation Tests</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #1a1a2e; color: #e0e0e0; }
+        .pass { color: #4caf50; }
+        .fail { color: #f44336; }
+        .info { color: #90caf9; }
+        #log { white-space: pre-wrap; line-height: 1.6; }
+        #summary { margin-top: 20px; padding: 10px; border: 1px solid #444; }
+    </style>
+</head>
+<body>
+    <h1>Portfolio Computation Tests</h1>
+    <div id="log"></div>
+    <div id="summary"></div>
+
+    <script type="module">
+        import { parseCSV, buildLots, processSells, computeStats, buildTimeSeries } from './portfolio.js';
+
+        const logEl = document.getElementById('log');
+        const summaryEl = document.getElementById('summary');
+        let passed = 0, failed = 0;
+
+        function log(msg, cls = '') {
+            const line = document.createElement('div');
+            line.textContent = msg;
+            if (cls) line.className = cls;
+            logEl.appendChild(line);
+        }
+
+        function assert(cond, msg) { if (!cond) throw new Error(msg || 'Assertion failed'); }
+        function assertEq(a, b, msg) {
+            if (a !== b) throw new Error(msg || `Expected ${b}, got ${a}`);
+        }
+        function assertClose(a, b, eps, msg) {
+            if (Math.abs(a - b) > eps)
+                throw new Error(msg || `Expected ~${b}, got ${a} (diff ${Math.abs(a-b)} > ${eps})`);
+        }
+
+        async function runTest(name, fn) {
+            try {
+                await fn();
+                passed++;
+                log(`PASS: ${name}`, 'pass');
+            } catch (err) {
+                failed++;
+                log(`FAIL: ${name} — ${err.message}`, 'fail');
+            }
+        }
+
+        // ── Shared test data ──────────────────────────────────────
+
+        const SAMPLE_CSV = `transaction_date,isin,quantity,price,type
+2024-01-15,INE002A01018,10,2500,BUY
+2024-02-20,INE002A01018,5,2600,BUY
+2024-03-10,INE009A01013,20,1450,BUY
+2024-09-15,INE002A01018,5,2700,SELL
+2024-12-15,INE002A01018,3,2800,SELL`;
+
+        /*  Hand-calculated expected values for SAMPLE_CSV, initialCapital=100000:
+         *
+         *  Buys:
+         *    10 × 2500 = 25000  (INE002A01018 lot1)
+         *     5 × 2600 = 13000  (INE002A01018 lot2)
+         *    20 × 1450 = 29000  (INE009A01013 lot1)
+         *    totalInvested = 67000
+         *
+         *  Sells (FIFO against INE002A01018):
+         *    SELL 5 @ 2700 → matched lot1 (cost 2500), PnL = 5×(2700−2500) = 1000
+         *    SELL 3 @ 2800 → matched lot1 remaining (cost 2500), PnL = 3×(2800−2500) = 900
+         *    totalProceeds = 13500 + 8400 = 21900
+         *    realizedPnL = 1000 + 900 = 1900
+         *
+         *  Remaining lots after FIFO:
+         *    lot1: INE002A01018, 10−5−3 = 2 shares @ 2500, cost = 5000
+         *    lot2: INE002A01018, 5 shares @ 2600, cost = 13000
+         *    lot3: INE009A01013, 20 shares @ 1450, cost = 29000
+         *    costBasisRemaining = 5000 + 13000 + 29000 = 47000
+         *
+         *  Cash = 100000 − 67000 + 21900 = 54900
+         *  portfolioValue (at cost) = 54900 + 47000 = 101900
+         *  totalReturn = 1900  (1.90%)
+         *
+         *  holdingDays = ceil(2024-12-15 − 2024-01-15) = 335 days
+         *  holdingYears = 335/365 ≈ 0.91781
+         *  annualizedReturn = (101900/100000)^(1/0.91781) − 1 ≈ 2.074%
+         */
+
+        // ── parseCSV tests ────────────────────────────────────────
+
+        await runTest('parseCSV: 5-col format', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            assertEq(txns.length, 5, 'Should parse 5 transactions');
+            assertEq(txns[0].isin, 'INE002A01018');
+            assertEq(txns[0].quantity, 10);
+            assertEq(txns[0].price, 2500);
+            assertEq(txns[0].type, 'BUY');
+            assertEq(txns[3].type, 'SELL');
+        });
+
+        await runTest('parseCSV: 4-col backward compat defaults to BUY', () => {
+            const csv = `date,symbol,quantity,price
+2024-01-15,RELIANCE,10,2500
+2024-02-20,TCS,5,4200`;
+            const txns = parseCSV(csv);
+            assertEq(txns.length, 2);
+            assertEq(txns[0].type, 'BUY');
+            assertEq(txns[1].isin, 'TCS');
+        });
+
+        await runTest('parseCSV: empty body returns []', () => {
+            const txns = parseCSV('date,isin,quantity,price,type\n');
+            assertEq(txns.length, 0);
+        });
+
+        await runTest('parseCSV: no header', () => {
+            const csv = '2024-01-15,INE002A01018,10,2500,BUY';
+            const txns = parseCSV(csv);
+            assertEq(txns.length, 1);
+        });
+
+        // ── buildLots tests ───────────────────────────────────────
+
+        await runTest('buildLots: filters only BUYs', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            const lots = buildLots(txns);
+            assertEq(lots.length, 3, 'Should have 3 buy lots');
+            assertEq(lots[0].shares, 10);
+            assertEq(lots[0].costBasis, 2500);
+            assertEq(lots[2].isin, 'INE009A01013');
+        });
+
+        // ── processSells / FIFO tests ─────────────────────────────
+
+        await runTest('FIFO: basic single sell', () => {
+            const txns = parseCSV(`date,isin,qty,price,type
+2024-01-10,X,10,100,BUY
+2024-06-01,X,5,150,SELL`);
+            const lots = buildLots(txns);
+            const details = processSells(lots, txns);
+            assertEq(details.length, 1);
+            assertEq(details[0].sharesSold, 5);
+            assertEq(details[0].costBasis, 100);
+            assertEq(details[0].pnl, 5 * (150 - 100));   // 250
+            assertEq(lots[0].shares, 5, 'lot should have 5 remaining');
+        });
+
+        await runTest('FIFO: sell spans two lots', () => {
+            const txns = parseCSV(`date,isin,quantity,price,type
+2024-01-01,X,3,100,BUY
+2024-02-01,X,5,120,BUY
+2024-06-01,X,4,150,SELL`);
+            const lots = buildLots(txns);
+            const details = processSells(lots, txns);
+            // Sell 4: first 3 from lot1@100, then 1 from lot2@120
+            assertEq(details.length, 2);
+            assertEq(details[0].sharesSold, 3);
+            assertEq(details[0].costBasis, 100);
+            assertEq(details[0].pnl, 3 * 50);   // 150
+            assertEq(details[1].sharesSold, 1);
+            assertEq(details[1].costBasis, 120);
+            assertEq(details[1].pnl, 1 * 30);   // 30
+            assertEq(lots[0].shares, 0);
+            assertEq(lots[1].shares, 4);
+        });
+
+        await runTest('FIFO: sell at a loss', () => {
+            const txns = parseCSV(`date,isin,quantity,price,type
+2024-01-01,X,10,200,BUY
+2024-06-01,X,4,150,SELL`);
+            const lots = buildLots(txns);
+            const details = processSells(lots, txns);
+            assertEq(details[0].pnl, 4 * (150 - 200));   // −200
+        });
+
+        await runTest('FIFO: multiple ISINs are independent', () => {
+            const txns = parseCSV(`date,isin,quantity,price,type
+2024-01-01,A,10,100,BUY
+2024-01-01,B,10,200,BUY
+2024-06-01,B,5,250,SELL`);
+            const lots = buildLots(txns);
+            const details = processSells(lots, txns);
+            assertEq(details.length, 1);
+            assertEq(details[0].isin, 'B');
+            assertEq(details[0].costBasis, 200);
+            assertEq(lots[0].shares, 10, 'A lot untouched');
+            assertEq(lots[1].shares, 5, 'B lot reduced');
+        });
+
+        await runTest('FIFO: sell all shares', () => {
+            const txns = parseCSV(`date,isin,quantity,price,type
+2024-01-01,X,10,100,BUY
+2024-06-01,X,10,120,SELL`);
+            const lots = buildLots(txns);
+            processSells(lots, txns);
+            assertEq(lots[0].shares, 0);
+        });
+
+        await runTest('FIFO: multiple sells deplete lots correctly', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            const lots = buildLots(txns);
+            const details = processSells(lots, txns);
+            // Sell 5@2700 from lot1(10@2500): lot1→5 remaining
+            // Sell 3@2800 from lot1(5@2500): lot1→2 remaining
+            assertEq(lots[0].shares, 2, 'lot1: 10−5−3 = 2');
+            assertEq(lots[1].shares, 5, 'lot2 untouched');
+            assertEq(lots[2].shares, 20, 'lot3 untouched');
+            const totalPnL = details.reduce((s, d) => s + d.pnl, 0);
+            assertEq(totalPnL, 1900);
+        });
+
+        // ── computeStats tests ────────────────────────────────────
+
+        await runTest('computeStats: sample CSV, capital=100000', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            const s = computeStats(txns, 100000);
+
+            assertEq(s.totalInvested, 67000, 'totalInvested');
+            assertEq(s.totalProceeds, 21900, 'totalProceeds');
+            assertEq(s.realizedPnL, 1900, 'realizedPnL');
+            assertEq(s.costBasisRemaining, 47000, 'costBasisRemaining');
+            assertEq(s.cashBalance, 54900, 'cashBalance');
+            assertEq(s.portfolioValue, 101900, 'portfolioValue');
+            assertEq(s.totalReturn, 1900, 'totalReturn');
+            assertClose(s.totalReturnPct, 1.9, 0.01, 'totalReturnPct');
+            assertEq(s.numStocks, 2, 'numStocks');
+            assertEq(s.holdingDays, 335, 'holdingDays');
+            assertClose(s.annualizedReturnPct, 2.074, 0.1, 'annualizedReturnPct');
+        });
+
+        await runTest('computeStats: buy-only portfolio', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-15,X,10,2500,BUY
+2024-02-20,Y,20,1450,BUY`;
+            const s = computeStats(parseCSV(csv), 100000);
+
+            assertEq(s.totalInvested, 54000);
+            assertEq(s.totalProceeds, 0);
+            assertEq(s.realizedPnL, 0);
+            assertEq(s.costBasisRemaining, 54000);
+            assertEq(s.cashBalance, 46000);
+            // At-cost valuation: cash + holdings = 46000 + 54000 = 100000
+            assertEq(s.portfolioValue, 100000, 'buy-only at cost = initial capital');
+            assertEq(s.totalReturn, 0);
+            assertEq(s.numStocks, 2);
+        });
+
+        await runTest('computeStats: sell everything at profit', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,10,100,BUY
+2024-06-01,X,10,150,SELL`;
+            const s = computeStats(parseCSV(csv), 10000);
+
+            assertEq(s.totalInvested, 1000);
+            assertEq(s.totalProceeds, 1500);
+            assertEq(s.realizedPnL, 500);
+            assertEq(s.costBasisRemaining, 0);
+            assertEq(s.cashBalance, 10500);  // 10000 − 1000 + 1500
+            assertEq(s.portfolioValue, 10500);
+            assertEq(s.totalReturn, 500);
+            assertEq(s.totalReturnPct, 5);
+            assertEq(s.numStocks, 0, 'no stocks held');
+        });
+
+        await runTest('computeStats: sell everything at loss', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,10,200,BUY
+2024-06-01,X,10,150,SELL`;
+            const s = computeStats(parseCSV(csv), 10000);
+
+            assertEq(s.realizedPnL, -500);
+            assertEq(s.portfolioValue, 9500);
+            assertEq(s.totalReturn, -500);
+        });
+
+        await runTest('computeStats: null for empty transactions', () => {
+            const s = computeStats([], 100000);
+            assertEq(s, null);
+        });
+
+        await runTest('computeStats: identity — realized PnL equals totalReturn at cost', () => {
+            // For at-cost valuation, totalReturn should always equal realizedPnL
+            const txns = parseCSV(SAMPLE_CSV);
+            const s = computeStats(txns, 100000);
+            assertEq(s.totalReturn, s.realizedPnL, 'totalReturn == realizedPnL at cost');
+        });
+
+        await runTest('computeStats: cash + holdings = portfolioValue', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            const s = computeStats(txns, 100000);
+            assertEq(s.cashBalance + s.costBasisRemaining, s.portfolioValue);
+        });
+
+        // ── buildTimeSeries tests ─────────────────────────────────
+
+        await runTest('timeSeries: buy-only stays flat at cost', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-15,X,10,100,BUY
+2024-02-15,Y,5,200,BUY`;
+            const ts = buildTimeSeries(parseCSV(csv), 10000);
+            assertEq(ts.length, 2);
+            // After first buy: cash=9000, holdings=1000, total=10000
+            assertEq(ts[0].portfolioValue, 10000);
+            assertEq(ts[0].cash, 9000);
+            // After second buy: cash=8000, holdings=2000, total=10000
+            assertEq(ts[1].portfolioValue, 10000);
+            assertEq(ts[1].returnPct, 0);
+        });
+
+        await runTest('timeSeries: sell at profit increases value', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,10,100,BUY
+2024-06-01,X,5,150,SELL`;
+            const ts = buildTimeSeries(parseCSV(csv), 10000);
+            // After buy: cash=9000, holdings=1000, total=10000
+            assertEq(ts[0].portfolioValue, 10000);
+            // After sell: cash=9000+750=9750, holdings=500, total=10250
+            assertEq(ts[1].cash, 9750);
+            assertEq(ts[1].holdingsCost, 500);
+            assertEq(ts[1].portfolioValue, 10250);
+            assertClose(ts[1].returnPct, 2.5, 0.01);
+        });
+
+        await runTest('timeSeries: sell at loss decreases value', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,10,200,BUY
+2024-06-01,X,10,150,SELL`;
+            const ts = buildTimeSeries(parseCSV(csv), 10000);
+            // After sell: cash=10000-2000+1500=9500, holdings=0, total=9500
+            assertEq(ts[1].portfolioValue, 9500);
+            assertClose(ts[1].returnPct, -5, 0.01);
+        });
+
+        await runTest('timeSeries: FIFO lot consumption across days', () => {
+            const txns = parseCSV(SAMPLE_CSV);
+            const ts = buildTimeSeries(txns, 100000);
+
+            // Day 1 (2024-01-15): buy 10@2500 -> cash=75000, hold=25000, total=100000
+            assertEq(ts[0].cash, 75000);
+            assertEq(ts[0].holdingsCost, 25000);
+            assertEq(ts[0].portfolioValue, 100000);
+
+            // Day 2 (2024-02-20): buy 5@2600 -> cash=62000, hold=38000, total=100000
+            assertEq(ts[1].cash, 62000);
+            assertEq(ts[1].holdingsCost, 38000);
+            assertEq(ts[1].portfolioValue, 100000);
+
+            // Day 3 (2024-03-10): buy 20@1450 -> cash=33000, hold=67000, total=100000
+            assertEq(ts[2].cash, 33000);
+            assertEq(ts[2].holdingsCost, 67000);
+            assertEq(ts[2].portfolioValue, 100000);
+
+            // Day 4 (2024-09-15): sell 5 INE002A01018 @2700
+            // cash=33000+13500=46500
+            // lot1: 10-5=5 shares @2500 → cost=12500; lot2: 5@2600=13000; lot3: 20@1450=29000
+            // holdings cost = 12500+13000+29000 = 54500, total=101000
+            assertEq(ts[3].cash, 46500);
+            assertEq(ts[3].holdingsCost, 54500);
+            assertEq(ts[3].portfolioValue, 101000);
+
+            // Day 5 (2024-12-15): sell 3 INE002A01018 @2800
+            // cash=46500+8400=54900
+            // lot1: 5-3=2 shares @2500 → cost=5000; lot2: 5@2600=13000; lot3: 20@1450=29000
+            // holdings cost = 5000+13000+29000 = 47000, total=101900
+            assertEq(ts[4].cash, 54900);
+            assertEq(ts[4].holdingsCost, 47000);
+            assertEq(ts[4].portfolioValue, 101900);
+            assertClose(ts[4].returnPct, 1.9, 0.01);
+        });
+
+        await runTest('timeSeries: empty transactions', () => {
+            const ts = buildTimeSeries([], 100000);
+            assertEq(ts.length, 0);
+        });
+
+        // ── Edge cases ────────────────────────────────────────────
+
+        await runTest('edge: fractional shares', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,10.5,100,BUY
+2024-06-01,X,3.5,120,SELL`;
+            const s = computeStats(parseCSV(csv), 50000);
+            assertEq(s.totalInvested, 1050);
+            assertEq(s.totalProceeds, 420);
+            assertClose(s.realizedPnL, 3.5 * 20, 0.001);  // 70
+            assertEq(s.holdings[0].shares, 7);
+        });
+
+        await runTest('edge: multiple sells same day same ISIN', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,20,100,BUY
+2024-06-01,X,5,120,SELL
+2024-06-01,X,3,130,SELL`;
+            const s = computeStats(parseCSV(csv), 50000);
+            assertEq(s.realizedPnL, 5*20 + 3*30);  // 100 + 90 = 190
+            assertEq(s.holdings[0].shares, 12);
+        });
+
+        await runTest('edge: sell more than first lot requires spanning', () => {
+            const csv = `date,isin,quantity,price,type
+2024-01-01,X,5,100,BUY
+2024-02-01,X,5,110,BUY
+2024-03-01,X,5,120,BUY
+2024-06-01,X,12,150,SELL`;
+            const s = computeStats(parseCSV(csv), 50000);
+            // FIFO: 5@100, 5@110, 2@120
+            const expectedPnL = 5*(150-100) + 5*(150-110) + 2*(150-120);
+            // = 250 + 200 + 60 = 510
+            assertEq(s.realizedPnL, expectedPnL);
+            assertEq(s.holdings[0].shares, 3);
+            assertEq(s.holdings[0].costBasis, 120);
+        });
+
+        // ── Summary ───────────────────────────────────────────────
+
+        const total = passed + failed;
+        const msg = `${passed}/${total} passed, ${failed} failed`;
+        log(`\n--- Results: ${msg} ---`, failed > 0 ? 'fail' : 'pass');
+        summaryEl.textContent = msg;
+        summaryEl.className = failed > 0 ? 'fail' : 'pass';
+        window.__testResults = { passed, failed, total };
+    </script>
+</body>
+</html>
