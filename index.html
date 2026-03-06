@@ -93,6 +93,20 @@
             </div>
         </section>
 
+        <!-- AI Insights Section -->
+        <section class="insights-section" id="insightsSection" style="display: none;">
+            <h2>AI Insights</h2>
+            <div class="insights-config">
+                <div class="form-group">
+                    <label for="apiKey">OpenRouter API Key:</label>
+                    <input type="password" id="apiKey" placeholder="sk-or-..." autocomplete="off">
+                </div>
+                <button id="generateInsights" class="insights-btn" disabled>Generate Insights</button>
+            </div>
+            <div class="insights-status" id="insightsStatus" style="display: none;"></div>
+            <div class="insights-output" id="insightsOutput"></div>
+        </section>
+
         <!-- Loading Section -->
         <section class="loading-section" id="loadingSection" style="display: none;">
             <div class="loader">

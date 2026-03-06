@@ -1,6 +1,7 @@
 import { initDuckDB, runQuery, isReady, asDB } from './duckdb-module.ts';
 import { parseCSV } from './portfolio.ts';
 import { loadTransactions, getStats, getTimeSeries } from './analysis.ts';
+import { generateInsights } from './insights.ts';
 import type { Transaction, PortfolioStats, TimeSeriesPoint } from './types.ts';
 
 declare const Chart: {
@@ -36,7 +37,12 @@ const elements = {
     loadingText: document.getElementById('loadingText') as HTMLElement,
     errorSection: document.getElementById('errorSection') as HTMLElement,
     errorMessage: document.getElementById('errorMessage') as HTMLElement,
-    retryBtn: document.getElementById('retryBtn') as HTMLButtonElement
+    retryBtn: document.getElementById('retryBtn') as HTMLButtonElement,
+    insightsSection: document.getElementById('insightsSection') as HTMLElement,
+    apiKey: document.getElementById('apiKey') as HTMLInputElement,
+    generateInsightsBtn: document.getElementById('generateInsights') as HTMLButtonElement,
+    insightsStatus: document.getElementById('insightsStatus') as HTMLElement,
+    insightsOutput: document.getElementById('insightsOutput') as HTMLElement
 };
 
 async function init(): Promise<void> {
@@ -59,6 +65,10 @@ function setupEventListeners(): void {
     elements.benchmarkSelect.addEventListener('change', async () => {
         if (currentTransactions) await runAnalysis();
     });
+    elements.apiKey.addEventListener('input', () => {
+        elements.generateInsightsBtn.disabled = !elements.apiKey.value.trim();
+    });
+    elements.generateInsightsBtn.addEventListener('click', handleGenerateInsights);
 }
 
 async function handleFileUpload(event: Event): Promise<void> {
@@ -100,6 +110,7 @@ async function runAnalysis(): Promise<void> {
         const benchmarkReturns = await calculateBenchmarkReturns(elements.benchmarkSelect.value);
 
         renderResults(stats, timeSeries, benchmarkReturns);
+        elements.insightsSection.style.display = 'block';
         hideLoading();
     } catch (error) {
         hideLoading();
@@ -223,6 +234,43 @@ function renderChart(timeSeries: TimeSeriesPoint[], benchmarkReturns: BenchmarkR
             }
         }
     });
+}
+
+async function handleGenerateInsights(): Promise<void> {
+    const apiKey = elements.apiKey.value.trim();
+    if (!apiKey || !currentTransactions) return;
+
+    elements.generateInsightsBtn.disabled = true;
+    elements.insightsStatus.style.display = 'block';
+    elements.insightsOutput.textContent = '';
+
+    try {
+        const result = await generateInsights(asDB(), apiKey, (msg) => {
+            elements.insightsStatus.textContent = msg;
+        });
+        elements.insightsStatus.style.display = 'none';
+        elements.insightsOutput.innerHTML = renderMarkdown(result);
+    } catch (err) {
+        elements.insightsStatus.style.display = 'none';
+        elements.insightsOutput.textContent = 'Error: ' + (err instanceof Error ? err.message : String(err));
+        elements.insightsOutput.className = 'insights-output error';
+    } finally {
+        elements.generateInsightsBtn.disabled = false;
+    }
+}
+
+function renderMarkdown(md: string): string {
+    const escaped = md
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Convert bullet lines to <li>, then wrap consecutive <li>s in <ul>
+    const withLists = escaped
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>')
+        .replace(/^- (.+)$/gm, '<li>$1</li>');
+    // Wrap consecutive <li> blocks in <ul>
+    const withUl = withLists.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+    return withUl.replace(/\n{2,}/g, '<br><br>').replace(/\n/g, '<br>');
 }
 
 function showLoading(text: string): void {
