@@ -175,17 +175,12 @@ async function _fetch(url: string, safeName: string): Promise<ArrayBuffer> {
     }
 
     // Unconditional GET (no cache, no validators, or 304 with missing bytes)
-    let res: Response;
-    try {
-        res = await fetch(url);
-    } catch (e) {
-        throw e;
-    }
-    if (!res!.ok) throw new Error(`Failed to fetch ${url}: ${res!.status}`);
-    const bytes = await res!.arrayBuffer();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+    const bytes = await res.arrayBuffer();
     writeToCache(dir, safeName, bytes, {
-        etag: res!.headers.get('etag') ?? undefined,
-        lastModified: res!.headers.get('last-modified') ?? undefined,
+        etag: res.headers.get('etag') ?? undefined,
+        lastModified: res.headers.get('last-modified') ?? undefined,
     });
     return bytes;
 }
