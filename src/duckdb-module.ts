@@ -1,4 +1,5 @@
 import type { DB } from './types.ts';
+import { fetchWithCache } from './opfs-cache.ts';
 
 interface ArrowField { name: string; }
 interface ArrowSchema { fields: ArrowField[]; }
@@ -90,9 +91,7 @@ export function getDB(): DuckDBInstance {
 
 export async function registerParquet(name: string, url: string): Promise<void> {
     if (!db) throw new Error('DuckDB not initialized. Call initDuckDB() first.');
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
-    const buffer = await response.arrayBuffer();
+    const buffer = await fetchWithCache(name, url);
     await (db as unknown as { registerFileBuffer(name: string, buffer: Uint8Array): Promise<void> })
         .registerFileBuffer(name, new Uint8Array(buffer));
 }
