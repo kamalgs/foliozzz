@@ -199,6 +199,26 @@ function parseLegacy(lines: string[]): Transaction[] {
     return transactions;
 }
 
+// ── PII sanitisation ──────────────────────────────────────────────────────────
+
+// Broker metadata row keys that contain personal information.
+// Matched case-insensitively against the first tab-delimited cell.
+const PII_KEYS = ['name', 'unique client code', 'client code', 'client id', 'pan'];
+
+/**
+ * Replace the values of known PII metadata rows with [REDACTED].
+ * Safe to call on any CSV/TSV content — non-matching lines are returned unchanged.
+ */
+export function sanitiseCSV(content: string): string {
+    return content.split('\n').map(line => {
+        const tabIdx = line.indexOf('\t');
+        if (tabIdx < 0) return line;
+        const key = line.slice(0, tabIdx).trim().toLowerCase();
+        if (PII_KEYS.some(k => key === k)) return line.slice(0, tabIdx + 1) + '[REDACTED]';
+        return line;
+    }).join('\n');
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function parseCSV(content: string): Transaction[] {

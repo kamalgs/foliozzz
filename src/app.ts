@@ -1,5 +1,5 @@
 import { initDuckDB, runQuery, isReady, asDB, registerParquet } from './duckdb-module.ts';
-import { parseCSV } from './portfolio.ts';
+import { parseCSV, sanitiseCSV } from './portfolio.ts';
 import { loadTransactions, getStats } from './analysis.ts';
 import { generateInsights, hasDefaultKey } from './insights.ts';
 import { buildDailyTimeSeries } from './timeseries.ts';
@@ -94,7 +94,7 @@ async function handleFileUpload(event: Event): Promise<void> {
 
     showLoading('Parsing transactions...');
     try {
-        const content = await file.text();
+        const content = sanitiseCSV(await file.text());
         const transactions = parseCSV(content);
         if (transactions.length === 0) throw new Error('No valid transactions found in CSV');
 

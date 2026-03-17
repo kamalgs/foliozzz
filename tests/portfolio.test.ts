@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import { createRequire } from 'node:module';
-import { parseCSV } from '../src/portfolio.ts';
+import { parseCSV, sanitiseCSV } from '../src/portfolio.ts';
 import { loadTransactions, getStats, getTimeSeries, getHoldings, getSellDetails } from '../src/analysis.ts';
 import type { DB } from '../src/types.ts';
 
@@ -112,6 +112,27 @@ describe('parseCSV', () => {
         const txns = parseCSV(tsv);
         strictEqual(txns.length, 1);
         strictEqual(txns[0].isin, 'INE001');
+    });
+
+    it('sanitiseCSV redacts PII metadata rows, leaves other lines unchanged', () => {
+        const input = [
+            'Name\tGovindaraj Kamal',
+            'Unique Client Code\t9041298312',
+            'PAN\tABCDE1234F',
+            '',
+            'Stock name\tISIN\tQuantity',
+        ].join('\n');
+        const out = sanitiseCSV(input);
+        ok(!out.includes('Govindaraj Kamal'), 'name must be redacted');
+        ok(!out.includes('9041298312'), 'client code must be redacted');
+        ok(!out.includes('ABCDE1234F'), 'PAN must be redacted');
+        ok(out.includes('[REDACTED]'), 'replacement token present');
+        ok(out.includes('Stock name\tISIN\tQuantity'), 'non-PII row unchanged');
+    });
+
+    it('sanitiseCSV does not alter comma-delimited files', () => {
+        const csv = 'date,isin,quantity,price,type\n2024-01-01,X,10,100,BUY';
+        strictEqual(sanitiseCSV(csv), csv);
     });
 
     it('Groww format: parses SELL type correctly', () => {
