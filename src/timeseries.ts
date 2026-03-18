@@ -28,31 +28,74 @@ export interface DailyValue {
     returnPct: number;
 }
 
+async function loadCorporateActions(db: DB): Promise<void> {
+    await db.exec('DROP TABLE IF EXISTS corporate_actions');
+    await db.exec(`CREATE TABLE corporate_actions (
+        isin VARCHAR, ex_date DATE, ratio DOUBLE, action_type VARCHAR
+    )`);
+    try {
+        await registerParquet('corporate_actions.parquet', 'data/corporate_actions.parquet');
+        await db.exec(`
+            INSERT INTO corporate_actions
+            SELECT isin, ex_date, ratio, action_type
+            FROM parquet_scan('corporate_actions.parquet')
+            WHERE ratio > 1.0
+        `);
+    } catch {
+        // File absent, empty table, VIEW returns unadjusted prices
+    }
+}
+
 /**
- * Load stock price parquets for held ISINs into DuckDB.
+ * Load stock price parquets for held ISINs into DuckDB as an adjusted VIEW.
+ * Historical prices are divided by the cumulative ratio product of all corporate
+ * actions (bonus/split) that occurred strictly after each price date.
  */
 export async function loadStockPrices(db: DB, isinToSymbol: Record<string, string>): Promise<void> {
+    await db.exec('DROP VIEW IF EXISTS stock_prices');
     await db.exec('DROP TABLE IF EXISTS stock_prices');
-    await db.exec(`CREATE TABLE stock_prices (date DATE, symbol VARCHAR, isin VARCHAR, close DOUBLE)`);
 
     const isins = await db.query('SELECT DISTINCT isin FROM transactions');
+    const parts: string[] = [];
+
     for (const row of isins) {
         const isin = String(row.isin);
         const symbol = isinToSymbol[isin];
         if (!symbol) continue;
         const filename = `${symbol}.parquet`;
+        const regName = `sp_${symbol}.parquet`;
         try {
-            await registerParquet(`stock_prices/${filename}`, `data/stock_prices/${filename}`);
-            await db.exec(`
-                INSERT INTO stock_prices
-                SELECT date, symbol, '${isin}' as isin, close
-                FROM parquet_scan('stock_prices/${filename}')
-                WHERE close IS NOT NULL
-            `);
-        } catch {
-            // Stock price file not available
-        }
+            await registerParquet(regName, `data/stock_prices/${filename}`);
+            parts.push(
+                `SELECT date, symbol, '${isin}' AS isin, close ` +
+                `FROM parquet_scan('${regName}') WHERE close IS NOT NULL`
+            );
+        } catch { /* price file not available */ }
     }
+
+    if (parts.length === 0) {
+        await db.exec(`CREATE VIEW stock_prices AS
+            SELECT NULL::DATE AS date, NULL::VARCHAR AS symbol,
+                   NULL::VARCHAR AS isin, NULL::DOUBLE AS close WHERE false`);
+        return;
+    }
+
+    const raw = parts.join('\nUNION ALL\n');
+    await db.exec(`
+        CREATE VIEW stock_prices AS
+        WITH raw AS (${raw})
+        SELECT
+            r.date,
+            r.symbol,
+            r.isin,
+            r.close / COALESCE(EXP(SUM(LN(ca.ratio))), 1.0) AS close
+        FROM raw r
+        LEFT JOIN corporate_actions ca
+               ON  ca.isin    = r.isin
+               AND ca.ex_date >  r.date
+               AND ca.ex_date <= CURRENT_DATE::DATE
+        GROUP BY r.date, r.symbol, r.isin, r.close
+    `);
 }
 
 /** SQL query that builds daily portfolio valuation. */
@@ -140,6 +183,7 @@ export async function buildDailyTimeSeries(
     initialCapital: number
 ): Promise<DailyValue[]> {
     const map = await loadIsinMap();
+    await loadCorporateActions(db);
     await loadStockPrices(db, map);
 
     const rows = await db.query(DAILY_VALUATION_SQL(initialCapital));

@@ -45,6 +45,69 @@ async function setupWithPrices(db: DB, transactions: string): Promise<void> {
     }
 }
 
+const CA_ADJUSTED_VIEW_SQL = `
+    CREATE VIEW stock_prices AS
+    WITH raw AS (
+        SELECT DATE '2021-06-15' AS date, 'TEST' AS symbol, 'TEST001' AS isin, 3200.0 AS close
+        UNION ALL
+        SELECT DATE '2021-06-16' AS date, 'TEST' AS symbol, 'TEST001' AS isin, 1600.0 AS close
+    )
+    SELECT r.date, r.symbol, r.isin,
+        r.close / COALESCE(EXP(SUM(LN(ca.ratio))), 1.0) AS close
+    FROM raw r
+    LEFT JOIN corporate_actions ca
+           ON ca.isin = r.isin AND ca.ex_date > r.date AND ca.ex_date <= CURRENT_DATE::DATE
+    GROUP BY r.date, r.symbol, r.isin, r.close
+`;
+
+const CA_TABLE_SQL = `CREATE TABLE corporate_actions (
+    isin VARCHAR, ex_date DATE, ratio DOUBLE, action_type VARCHAR
+)`;
+
+describe('Corporate action price adjustment', () => {
+    it('divides pre-ex-date prices by cumulative ratio, leaves ex-date price unchanged', async () => {
+        const { db, close } = createDB();
+        try {
+            await db.exec(CA_TABLE_SQL);
+            await db.exec("INSERT INTO corporate_actions VALUES ('TEST001', '2021-06-16', 2.0, 'BONUS')");
+            await db.exec(CA_ADJUSTED_VIEW_SQL);
+
+            const rows = await db.query('SELECT date, close FROM stock_prices ORDER BY date');
+            assert.equal(rows.length, 2);
+            // 2021-06-15 (before ex-date): raw=3200, adjusted=3200/2=1600
+            assert.equal(Number(rows[0].close), 1600.0);
+            // 2021-06-16 (ex-date itself): condition ex_date > r.date is false, stays 1600
+            assert.equal(Number(rows[1].close), 1600.0);
+        } finally {
+            close();
+        }
+    });
+
+    it('applies no adjustment when corporate_actions table is empty', async () => {
+        const { db, close } = createDB();
+        try {
+            await db.exec(CA_TABLE_SQL);
+            const emptyView = `
+                CREATE VIEW stock_prices AS
+                WITH raw AS (
+                    SELECT DATE '2021-06-15' AS date, 'T' AS symbol, 'X001' AS isin, 3200.0 AS close
+                )
+                SELECT r.date, r.symbol, r.isin,
+                    r.close / COALESCE(EXP(SUM(LN(ca.ratio))), 1.0) AS close
+                FROM raw r
+                LEFT JOIN corporate_actions ca
+                       ON ca.isin = r.isin AND ca.ex_date > r.date AND ca.ex_date <= CURRENT_DATE::DATE
+                GROUP BY r.date, r.symbol, r.isin, r.close
+            `;
+            await db.exec(emptyView);
+            const rows = await db.query('SELECT close FROM stock_prices');
+            assert.equal(Number(rows[0].close), 3200.0);
+        } finally {
+            close();
+        }
+    });
+});
+
 describe('Daily portfolio valuation', () => {
     it('produces daily data points between first and last transaction', async () => {
         const { db, close } = createDB();
