@@ -2,19 +2,21 @@
 """
 Incrementally update stock price and benchmark parquet files.
 
-Stocks: fetched from NSE Bhavcopy (one ZIP per trading day, all symbols).
+Stocks: fetched from NSE Bhavcopy (one ZIP per trading day, all EQ symbols).
+        Raw ZIPs are cached in DATA_DIR/bhavcopy_zips/ for future processing.
 Benchmarks: fetched from yfinance (unchanged).
+Symbol/ISIN: fetched from NSE EQUITY_L.csv master file.
 
 Usage:
-  python3 update_prices.py                      # update all
-  python3 update_prices.py --stocks             # stocks only
-  python3 update_prices.py --benchmarks         # benchmarks only
+  python3 update_prices.py                          # update all
+  python3 update_prices.py --stocks                 # all stocks via Bhavcopy
+  python3 update_prices.py --benchmarks             # benchmarks via yfinance
+  python3 update_prices.py --symbol-isin            # symbol/ISIN lookup parquet
   python3 update_prices.py --stocks --from 2025-01-01
 """
 
 import argparse
 import io
-import json
 import logging
 import time
 import zipfile
@@ -34,11 +36,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DATA_DIR  = Path("/opt/nomad/volumes/foliozzz_data/data")
-STOCK_DIR = DATA_DIR / "stock_prices"
-ISIN_MAP  = DATA_DIR / "isin_map.json"
+DATA_DIR       = Path("/opt/nomad/volumes/foliozzz_data/data")
+STOCK_DIR      = DATA_DIR / "stock_prices"
+BHAVCOPY_DIR   = DATA_DIR / "bhavcopy_zips"
 
-BHAVCOPY_RATE_LIMIT = 1.0  # seconds between requests
+BHAVCOPY_RATE_LIMIT = 1.0  # seconds between HTTP requests (skipped for cache hits)
 
 BENCHMARKS = {
     "nifty50":      "^NSEI",
@@ -49,9 +51,9 @@ BENCHMARKS = {
 }
 
 HISTORY_YEARS = 5
-RATE_LIMIT_SLEEP = 0.4  # seconds between yfinance calls
+YFINANCE_RATE_LIMIT = 0.4  # seconds between yfinance calls
 
-BHAVCOPY_HEADERS = {
+NSE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"
 }
 
@@ -63,6 +65,13 @@ PARQUET_SCHEMA = pa.schema([
     pa.field("close",  pa.float64()),
     pa.field("volume", pa.int64()),
     pa.field("symbol", pa.string()),
+])
+
+SYMBOL_ISIN_SCHEMA = pa.schema([
+    pa.field("symbol", pa.string()),
+    pa.field("isin",   pa.string()),
+    pa.field("name",   pa.string()),
+    pa.field("series", pa.string()),
 ])
 
 
@@ -83,6 +92,15 @@ def last_date_in(path: Path) -> date | None:
         return None
 
 
+def _strip_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip quotes/whitespace from column names and string cell values."""
+    df.columns = [c.strip().strip("'") for c in df.columns]
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].str.strip()
+    return df
+
+
 def write_parquet(df: pd.DataFrame, path: Path, symbol: str) -> None:
     """Write / overwrite a parquet file with the given DataFrame."""
     df = df.copy()
@@ -100,64 +118,65 @@ def write_parquet(df: pd.DataFrame, path: Path, symbol: str) -> None:
 # NSE Bhavcopy (stocks)
 # ---------------------------------------------------------------------------
 
-def download_bhavcopy(d: date) -> pd.DataFrame | None:
+def download_bhavcopy(d: date) -> tuple[pd.DataFrame | None, bool]:
     """
-    Download the NSE CM Bhavcopy ZIP for a given date and return a cleaned
-    DataFrame of EQ-series rows, or None if unavailable (holiday / bad ZIP).
-    """
-    date_str = d.strftime("%d-%b-%Y")        # e.g. "04-Mar-2026"
-    inner_csv = f"pd{d.strftime('%d%m%Y')}.csv"  # e.g. "pd04032026.csv"
+    Return (dataframe_of_EQ_rows_or_None, fetched_from_network).
 
-    url = (
-        "https://www.nseindia.com/api/reports"
-        "?archives=%5B%7B%22name%22%3A%22CM%20-%20Bhavcopy%20(PR.zip)%22"
-        "%2C%22type%22%3A%22archives%22%2C%22category%22%3A%22capital-market%22"
-        "%2C%22section%22%3A%22equities%22%7D%5D"
-        f"&date={date_str}&type=equities&mode=single"
-    )
+    The raw ZIP is cached at BHAVCOPY_DIR/{d.isoformat()}.zip.
+    If the cache exists it is used directly (no HTTP request, no sleep needed).
+    """
+    BHAVCOPY_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = BHAVCOPY_DIR / f"{d.isoformat()}.zip"
+
+    if zip_path.exists():
+        raw = zip_path.read_bytes()
+        fetched = False
+    else:
+        date_str = d.strftime("%d-%b-%Y")
+        url = (
+            "https://www.nseindia.com/api/reports"
+            "?archives=%5B%7B%22name%22%3A%22CM%20-%20Bhavcopy%20(PR.zip)%22"
+            "%2C%22type%22%3A%22archives%22%2C%22category%22%3A%22capital-market%22"
+            "%2C%22section%22%3A%22equities%22%7D%5D"
+            f"&date={date_str}&type=equities&mode=single"
+        )
+        try:
+            resp = requests.get(url, headers=NSE_HEADERS, timeout=30)
+        except Exception as e:
+            log.info("Bhavcopy request error for %s: %s", d, e)
+            return None, True
+
+        if resp.status_code != 200:
+            log.info("Bhavcopy HTTP %d for %s (holiday/weekend?)", resp.status_code, d)
+            return None, True
+
+        raw = resp.content
+        zip_path.write_bytes(raw)
+        fetched = True
 
     try:
-        resp = requests.get(url, headers=BHAVCOPY_HEADERS, timeout=30)
-    except Exception as e:
-        log.info("Bhavcopy request error for %s: %s", d, e)
-        return None
-
-    if resp.status_code != 200:
-        log.info("Bhavcopy HTTP %d for %s (holiday/weekend?)", resp.status_code, d)
-        return None
-
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
+        if zip_path.exists():
+            zip_path.unlink()  # evict corrupt cache entry
         log.info("Bhavcopy bad ZIP for %s (holiday/weekend?)", d)
-        return None
+        return None, fetched
 
-    # Find the inner CSV — filename format varies by year:
-    #   2026+: pd17032026.csv  (4-digit year, lowercase)
-    #   2025:  Pd020125.csv    (2-digit year, mixed case)
-    # Match any file whose basename starts with "pd" (case-insensitive).
+    # Filename format varies: 2026+ pd17032026.csv, 2025 Pd020125.csv
     names = zf.namelist()
     csv_name = next(
         (n for n in names if n.lower().split("/")[-1].startswith("pd") and n.lower().endswith(".csv")),
         None,
     )
     if csv_name is None:
-        log.warning("No CSV found in Bhavcopy ZIP for %s: %s", d, names)
-        return None
+        log.warning("No pd*.csv in Bhavcopy ZIP for %s: %s", d, names)
+        return None, fetched
 
-    df = pd.read_csv(io.BytesIO(zf.read(csv_name)))
+    df = _strip_cols(pd.read_csv(io.BytesIO(zf.read(csv_name))))
 
-    # Strip quotes and whitespace from column names (NSE wraps them in single quotes)
-    df.columns = [c.strip().strip("'") for c in df.columns]
-
-    # Strip whitespace from all string columns
-    for col in df.select_dtypes(include="str").columns:
-        df[col] = df[col].str.strip()
-
-    # Filter EQ series only
     df = df[df["SERIES"] == "EQ"].copy()
     if df.empty:
-        return None
+        return None, fetched
 
     df = df.rename(columns={
         "SYMBOL":      "symbol",
@@ -168,59 +187,63 @@ def download_bhavcopy(d: date) -> pd.DataFrame | None:
         "NET_TRDQTY":  "volume",
     })
 
-    return df[["symbol", "open", "high", "low", "close", "volume"]].copy()
+    df = df[["symbol", "open", "high", "low", "close", "volume"]].copy()
+
+    # Coerce numeric columns — some rows have blank values (index/header rows)
+    for col in ("open", "high", "low", "close", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["close"])
+    df["volume"] = df["volume"].fillna(0).astype("int64")
+
+    return (df if not df.empty else None), fetched
 
 
-def determine_date_range(symbols: list[str], start_override: date | None = None) -> tuple[date, date] | None:
+def determine_date_range(start_override: date | None = None) -> tuple[date, date] | None:
     """
-    Return (start_date, end_date) for the bhavcopy download loop, or None if
-    nothing to do.
+    Return (start_date, end_date) for the Bhavcopy download loop, or None if
+    nothing to do. start_date is derived from the earliest last-date across all
+    existing parquets in STOCK_DIR (falling back to 1 year ago if none exist).
     """
     today = date.today()
 
     if start_override is not None:
         start = start_override
     else:
-        last_dates = []
-        for sym in symbols:
-            path = STOCK_DIR / f"{sym}.parquet"
-            ld = last_date_in(path)
-            last_dates.append(ld if ld is not None else today - timedelta(days=365))
-        start = min(last_dates) + timedelta(days=1)
+        last_dates = [
+            last_date_in(p)
+            for p in STOCK_DIR.glob("*.parquet")
+            if (ld := last_date_in(p)) is not None
+        ]
+        start = (min(last_dates) + timedelta(days=1)) if last_dates else (today - timedelta(days=365))
 
-    end = today
-
-    if start > end:
-        log.info("All symbols are up to date.")
+    if start > today:
+        log.info("All stocks are up to date.")
         return None
 
-    return start, end
+    return start, today
 
 
-def collect_new_rows(
-    symbols: list[str], start_date: date, end_date: date
-) -> dict[str, list[dict]]:
+def collect_new_rows(start_date: date, end_date: date) -> dict[str, list[dict]]:
     """
-    Walk each calendar day in [start_date, end_date], download the Bhavcopy,
-    and accumulate per-symbol OHLCV rows.
+    Walk each calendar day in [start_date, end_date], download (or load cached)
+    Bhavcopy, and accumulate OHLCV rows for every EQ symbol found.
     """
-    symbol_set = set(symbols)
-    new_rows: dict[str, list[dict]] = {sym: [] for sym in symbols}
+    new_rows: dict[str, list[dict]] = {}
 
     d = start_date
     while d <= end_date:
-        if d.weekday() >= 5:  # Saturday=5, Sunday=6
+        if d.weekday() >= 5:  # skip weekends — no HTTP, no sleep
             d += timedelta(days=1)
             continue
 
-        df = download_bhavcopy(d)
+        df, fetched = download_bhavcopy(d)
         if df is not None:
-            day_syms = set(df["symbol"]) & symbol_set
-            log.info("Bhavcopy %s: %d of our symbols present", d, len(day_syms))
-            for _, row in df[df["symbol"].isin(symbol_set)].iterrows():
+            log.info("Bhavcopy %s: %d EQ symbols", d, len(df))
+            ts = pd.Timestamp(d)
+            for _, row in df.iterrows():
                 sym = row["symbol"]
-                new_rows[sym].append({
-                    "date":   pd.Timestamp(d),
+                new_rows.setdefault(sym, []).append({
+                    "date":   ts,
                     "open":   float(row["open"]),
                     "high":   float(row["high"]),
                     "low":    float(row["low"]),
@@ -229,24 +252,25 @@ def collect_new_rows(
                     "symbol": sym,
                 })
 
-        time.sleep(BHAVCOPY_RATE_LIMIT)
+        if fetched:
+            time.sleep(BHAVCOPY_RATE_LIMIT)
+
         d += timedelta(days=1)
 
     return new_rows
 
 
-def write_symbol_parquets(symbols: list[str], new_rows_by_symbol: dict[str, list[dict]]) -> None:
-    """Merge new rows into existing parquets and write."""
+def write_symbol_parquets(new_rows_by_symbol: dict[str, list[dict]]) -> None:
+    """Merge new rows into existing parquets (or create new ones) and write."""
     STOCK_DIR.mkdir(parents=True, exist_ok=True)
+    written = skipped = 0
 
-    for sym in symbols:
-        rows = new_rows_by_symbol.get(sym, [])
-        path = STOCK_DIR / f"{sym}.parquet"
-
+    for sym, rows in new_rows_by_symbol.items():
         if not rows:
-            log.info("%-20s no new rows", sym)
+            skipped += 1
             continue
 
+        path = STOCK_DIR / f"{sym}.parquet"
         new_df = pd.DataFrame(rows)
 
         if path.exists():
@@ -261,26 +285,57 @@ def write_symbol_parquets(symbols: list[str], new_rows_by_symbol: dict[str, list
             combined = new_df
 
         write_parquet(combined, path, sym)
+        written += 1
+
+    log.info("Parquets: %d written, %d had no new rows", written, skipped)
 
 
 def update_stocks(start_date_override: date | None = None) -> None:
-    if not ISIN_MAP.exists():
-        log.error("isin_map.json not found at %s", ISIN_MAP)
-        return
-
-    isin_map: dict[str, str] = json.loads(ISIN_MAP.read_text())
-    symbols = sorted(set(isin_map.values()))
-    log.info("Updating %d stock files via NSE Bhavcopy", len(symbols))
-
-    result = determine_date_range(symbols, start_override=start_date_override)
+    result = determine_date_range(start_override=start_date_override)
     if result is None:
         return
     start_date, end_date = result
 
-    log.info("Date range: %s → %s", start_date, end_date)
-    new_rows = collect_new_rows(symbols, start_date, end_date)
-    write_symbol_parquets(symbols, new_rows)
+    log.info("Updating all NSE EQ stocks via Bhavcopy: %s → %s", start_date, end_date)
+    new_rows = collect_new_rows(start_date, end_date)
+    log.info("Symbols seen across date range: %d", len(new_rows))
+    write_symbol_parquets(new_rows)
     log.info("Stocks update complete.")
+
+
+# ---------------------------------------------------------------------------
+# Symbol / ISIN lookup parquet
+# ---------------------------------------------------------------------------
+
+def update_symbol_isin() -> None:
+    """
+    Download NSE's EQUITY_L.csv master and write symbol_isin.parquet with
+    columns: symbol, isin, name, series.
+    """
+    url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+    try:
+        resp = requests.get(url, headers=NSE_HEADERS, timeout=30)
+    except Exception as e:
+        log.error("Could not download EQUITY_L.csv: %s", e)
+        return
+
+    if resp.status_code != 200:
+        log.error("EQUITY_L.csv HTTP %d", resp.status_code)
+        return
+
+    df = _strip_cols(pd.read_csv(io.BytesIO(resp.content)))
+    df = df.rename(columns={
+        "SYMBOL":          "symbol",
+        "NAME OF COMPANY": "name",
+        "ISIN NUMBER":     "isin",
+        "SERIES":          "series",
+    })
+    df = df[["symbol", "isin", "name", "series"]].copy()
+
+    path = DATA_DIR / "symbol_isin.parquet"
+    table = pa.Table.from_pandas(df, schema=SYMBOL_ISIN_SCHEMA)
+    pq.write_table(table, path, compression="snappy")
+    log.info("Wrote %d rows to %s", len(df), path.name)
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +427,7 @@ def update_benchmarks() -> None:
             ok += 1
         else:
             fail += 1
-        time.sleep(RATE_LIMIT_SLEEP)
+        time.sleep(YFINANCE_RATE_LIMIT)
     log.info("Benchmarks: %d updated, %d failed", ok, fail)
 
 
@@ -382,19 +437,22 @@ def update_benchmarks() -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Update stock price parquets.")
-    parser.add_argument("--stocks",     action="store_true", help="Update stock parquets via NSE Bhavcopy")
-    parser.add_argument("--benchmarks", action="store_true", help="Update benchmark parquets via yfinance")
-    parser.add_argument("--from",       dest="from_date", metavar="YYYY-MM-DD",
+    parser.add_argument("--stocks",      action="store_true", help="Update all EQ stock parquets via NSE Bhavcopy")
+    parser.add_argument("--benchmarks",  action="store_true", help="Update benchmark parquets via yfinance")
+    parser.add_argument("--symbol-isin", action="store_true", help="Refresh symbol/ISIN lookup parquet")
+    parser.add_argument("--from",        dest="from_date", metavar="YYYY-MM-DD",
                         help="Override start date for stock downloads")
     args = parser.parse_args()
 
-    run_stocks     = args.stocks     or (not args.stocks and not args.benchmarks)
-    run_benchmarks = args.benchmarks or (not args.stocks and not args.benchmarks)
+    any_explicit = args.stocks or args.benchmarks or args.symbol_isin
+    run_stocks      = args.stocks      or not any_explicit
+    run_benchmarks  = args.benchmarks  or not any_explicit
+    run_symbol_isin = args.symbol_isin or not any_explicit
 
-    start_override = None
-    if args.from_date:
-        start_override = date.fromisoformat(args.from_date)
+    start_override = date.fromisoformat(args.from_date) if args.from_date else None
 
+    if run_symbol_isin:
+        update_symbol_isin()
     if run_stocks:
         update_stocks(start_date_override=start_override)
     if run_benchmarks:
