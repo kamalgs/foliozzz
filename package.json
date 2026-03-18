@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc --noEmit && esbuild src/app.ts --bundle --minify --format=esm --outfile=app.js --external:https://* && esbuild src/duckdb-module.ts --bundle --minify --format=esm --outfile=duckdb-module.js --external:https://*",
     "test": "node --experimental-strip-types --experimental-transform-types --test tests/portfolio.test.ts && playwright test",
-    "test:unit": "node --experimental-strip-types --experimental-transform-types --test tests/portfolio.test.ts tests/opfs-cache.test.ts",
+    "test:unit": "node --experimental-strip-types --experimental-transform-types --test tests/portfolio.test.ts tests/opfs-cache.test.ts tests/timeseries.test.ts",
     "test:e2e": "playwright test"
   },
   "repository": {

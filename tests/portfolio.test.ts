@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import { strictEqual, ok } from 'node:assert';
 import { createRequire } from 'node:module';
-import { parseCSV } from '../src/portfolio.ts';
+import { parseCSV, sanitiseCSV } from '../src/portfolio.ts';
 import { loadTransactions, getStats, getTimeSeries, getHoldings, getSellDetails } from '../src/analysis.ts';
 import type { DB } from '../src/types.ts';
 
@@ -76,6 +76,74 @@ describe('parseCSV', () => {
 
     it('parses rows without header', () => {
         strictEqual(parseCSV('2024-01-15,INE002A01018,10,2500,BUY').length, 1);
+    });
+
+    it('recognises Groww tab-delimited format, skips metadata rows', () => {
+        const tsv = [
+            'Name\tGovindaraj Kamal',
+            'Unique Client Code\t9041298312',
+            '',
+            'Order history for stocks from 01-04-2025 to 16-03-2026',
+            '',
+            'Stock name\tSymbol\tISIN\tType\tQuantity\tValue\tExchange\tExchange Order Id\tExecution date and time\tOrder status',
+            'ICICIPRAMC - ICICIBANKP\tPVTBANIETF\tINF109KC18U7\tBUY\t100\t2587\tNSE\tORD001\t01-04-2025 09:56 AM\tExecuted',
+            'ETERNAL LIMITED\tETERNAL\tINE758T01015\tBUY\t10\t2038.7\tNSE\tORD002\t02-04-2025 09:44 AM\tExecuted',
+        ].join('\n');
+        const txns = parseCSV(tsv);
+        strictEqual(txns.length, 2);
+        strictEqual(txns[0].isin, 'INF109KC18U7');
+        strictEqual(txns[0].quantity, 100);
+        strictEqual(txns[0].price, 25.87);
+        strictEqual(txns[0].type, 'BUY');
+        strictEqual(txns[0].date, '2025-04-01');
+        strictEqual(txns[1].isin, 'INE758T01015');
+        strictEqual(txns[1].quantity, 10);
+        strictEqual(txns[1].price, 203.87);
+        strictEqual(txns[1].date, '2025-04-02');
+    });
+
+    it('Groww format: skips non-Executed rows', () => {
+        const tsv = [
+            'Stock name\tSymbol\tISIN\tType\tQuantity\tValue\tExchange\tExchange Order Id\tExecution date and time\tOrder status',
+            'STOCK A\tSTKA\tINE001\tBUY\t10\t1000\tNSE\tORD001\t01-04-2025 09:00 AM\tExecuted',
+            'STOCK B\tSTKB\tINE002\tBUY\t5\t500\tNSE\tORD002\t02-04-2025 09:00 AM\tCancelled',
+            'STOCK C\tSTKC\tINE003\tSELL\t3\t600\tNSE\tORD003\t03-04-2025 09:00 AM\tRejected',
+        ].join('\n');
+        const txns = parseCSV(tsv);
+        strictEqual(txns.length, 1);
+        strictEqual(txns[0].isin, 'INE001');
+    });
+
+    it('sanitiseCSV redacts PII metadata rows, leaves other lines unchanged', () => {
+        const input = [
+            'Name\tGovindaraj Kamal',
+            'Unique Client Code\t9041298312',
+            'PAN\tABCDE1234F',
+            '',
+            'Stock name\tISIN\tQuantity',
+        ].join('\n');
+        const out = sanitiseCSV(input);
+        ok(!out.includes('Govindaraj Kamal'), 'name must be redacted');
+        ok(!out.includes('9041298312'), 'client code must be redacted');
+        ok(!out.includes('ABCDE1234F'), 'PAN must be redacted');
+        ok(out.includes('[REDACTED]'), 'replacement token present');
+        ok(out.includes('Stock name\tISIN\tQuantity'), 'non-PII row unchanged');
+    });
+
+    it('sanitiseCSV does not alter comma-delimited files', () => {
+        const csv = 'date,isin,quantity,price,type\n2024-01-01,X,10,100,BUY';
+        strictEqual(sanitiseCSV(csv), csv);
+    });
+
+    it('Groww format: parses SELL type correctly', () => {
+        const tsv = [
+            'Stock name\tSymbol\tISIN\tType\tQuantity\tValue\tExchange\tExchange Order Id\tExecution date and time\tOrder status',
+            'RELIANCE\tRELIANCE\tINE002A01018\tSELL\t5\t14000\tNSE\tORD001\t15-06-2025 10:00 AM\tExecuted',
+        ].join('\n');
+        const txns = parseCSV(tsv);
+        strictEqual(txns.length, 1);
+        strictEqual(txns[0].type, 'SELL');
+        strictEqual(txns[0].price, 2800);
     });
 });
 
