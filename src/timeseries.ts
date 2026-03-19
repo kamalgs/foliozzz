@@ -66,11 +66,13 @@ export async function loadStockPrices(db: DB, isinToSymbol: Record<string, strin
         const regName = `sp_${symbol}.parquet`;
         try {
             await registerParquet(regName, `data/stock_prices/${filename}`);
+            // Validate the file is a readable parquet before adding to VIEW
+            await db.query(`SELECT close FROM parquet_scan('${regName}') LIMIT 0`);
             parts.push(
                 `SELECT date, symbol, '${isin}' AS isin, close ` +
                 `FROM parquet_scan('${regName}') WHERE close IS NOT NULL`
             );
-        } catch { /* price file not available */ }
+        } catch { /* price file not available or corrupt — skip */ }
     }
 
     if (parts.length === 0) {
