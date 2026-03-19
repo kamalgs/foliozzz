@@ -145,12 +145,12 @@ function parseWithConfig(lines: string[], config: FormatConfig, headerIdx: numbe
         let price: number;
         if (valueIdx >= 0 && priceIdx < 0) {
             const total = parseFloat(parts[valueIdx] ?? '');
-            if (!total || total <= 0) continue;
+            // Allow total=0 for BUY (bonus shares have 0 cost); reject 0 for SELL and any negative
+            if (isNaN(total) || total < 0 || (type === 'SELL' && total === 0)) continue;
             price = total / quantity;
         } else if (priceIdx >= 0) {
             price = parseFloat(parts[priceIdx] ?? '');
-            if (!price || price <= 0) continue;
-        } else {
+            if (isNaN(price) || price < 0 || (type === 'SELL' && price === 0)) continue;        } else {
             continue;
         }
 

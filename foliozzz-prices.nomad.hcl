@@ -15,6 +15,7 @@ job "foliozzz-prices" {
 
       config {
         command = "/home/agent/.local/share/mise/installs/python/3.12.12/bin/python3"
+        # No flags = run all: symbol-isin → corp-actions → stocks → benchmarks
         args    = ["/home/agent/projects/foliozzz/scripts/update_prices.py"]
       }
 

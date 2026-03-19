@@ -113,16 +113,20 @@ def _strip_cols(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def write_parquet(df: pd.DataFrame, path: Path, symbol: str) -> None:
-    """Write / overwrite a parquet file with the given DataFrame."""
-    df = df.copy()
+    """Write / overwrite a parquet file with the given DataFrame.
+
+    Writes to a sibling .tmp file first, then renames atomically so readers
+    never see a partially-written file.
+    """    df = df.copy()
     df["symbol"] = symbol
     df = df.sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
     table = pa.Table.from_pandas(
         df[["date", "open", "high", "low", "close", "volume", "symbol"]],
         schema=PARQUET_SCHEMA,
     )
-    pq.write_table(table, path, compression="snappy")
-    log.info("Wrote %d rows to %s (last: %s)", len(df), path.name, df["date"].max().date())
+    tmp = path.with_suffix(".tmp")
+    pq.write_table(table, tmp, compression="snappy")
+    tmp.rename(path)    log.info("Wrote %d rows to %s (last: %s)", len(df), path.name, df["date"].max().date())
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +187,7 @@ def download_bhavcopy(d: date) -> tuple[pd.DataFrame | None, bool]:
         log.warning("No pd*.csv in Bhavcopy ZIP for %s: %s", d, names)
         return None, fetched
 
-    df = _strip_cols(pd.read_csv(io.BytesIO(zf.read(csv_name))))
-
+    df = _strip_cols(pd.read_csv(io.BytesIO(zf.read(csv_name)), encoding="latin-1"))
     df = df[df["SERIES"] == "EQ"].copy()
     if df.empty:
         return None, fetched
