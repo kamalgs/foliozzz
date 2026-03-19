@@ -150,8 +150,7 @@ function parseWithConfig(lines: string[], config: FormatConfig, headerIdx: numbe
             price = total / quantity;
         } else if (priceIdx >= 0) {
             price = parseFloat(parts[priceIdx] ?? '');
-            if (isNaN(price) || price < 0 || (type === 'SELL' && price === 0)) continue;
-        } else {
+            if (isNaN(price) || price < 0 || (type === 'SELL' && price === 0)) continue;        } else {
             continue;
         }
 
